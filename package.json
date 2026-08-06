@@ -1,0 +1,29 @@
+{
+  "name": "iris-starter-kit",
+  "version": "0.1.0",
+  "description": "Simple open-source Electron starter for IRIS markerless mocap apps",
+  "author": "",
+  "license": "MIT",
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env NODE_ENV=development VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "build": "npm run build:electron && vue-tsc --noEmit && vite build",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "preview": "npm run build && cross-env NODE_ENV=production electron .",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^34.0.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7",
+    "vue-tsc": "^2.2.0",
+    "wait-on": "^8.0.2"
+  }
+}
