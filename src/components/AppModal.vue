@@ -39,8 +39,9 @@ defineEmits<{
 }
 
 .panel {
-  width: min(560px, 100%);
-  max-height: min(90vh, 720px);
+  width: 85vw;
+  max-width: 1400px;
+  max-height: 90vh;
   background: #171b24;
   border: 1px solid #2a3140;
   border-radius: 8px;
@@ -66,6 +67,8 @@ defineEmits<{
 .body {
   padding: 20px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.06) transparent;
 }
 
 .foot {
@@ -89,4 +92,9 @@ defineEmits<{
 .icon-btn:hover {
   color: #e8eaed;
 }
+
+/* minimal scrollbar for webkit */
+.body::-webkit-scrollbar { height: 8px; width: 8px; }
+.body::-webkit-scrollbar-track { background: transparent; }
+.body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 8px; }
 </style>
