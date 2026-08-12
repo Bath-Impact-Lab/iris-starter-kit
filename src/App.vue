@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
-import type { AppPhase, CameraConfig } from './types';
+import type { AppPhase, CameraConfig, PoseFrame } from './types';
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
 import LiveView from './components/LiveView.vue';
@@ -12,8 +12,37 @@ const calibrationOpen = ref(true);
 const settingsOpen = ref(false);
 const mockFps = ref(30);
 const mockJoints = ref({ valid: 15, total: 17 });
-
+const livePose = ref<PoseFrame | null>(null);
 let fpsTick: number | undefined;
+let removePoseListener: (() => void) | null = null;
+
+function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number; total: number } {
+  const candidates: Array<Array<{ x?: number; y?: number; visible?: number; confidence?: number }>> = [];
+
+  if (!frame) return { valid: 0, total: 17 };
+
+  if (Array.isArray(frame.keypoints)) candidates.push(frame.keypoints as any);
+  if (Array.isArray(frame.joints)) candidates.push(frame.joints as any);
+  if (Array.isArray(frame.pose)) candidates.push(frame.pose as any);
+
+  if (Array.isArray(frame.people)) {
+    for (const person of frame.people) {
+      if (person && typeof person === 'object') {
+        if (Array.isArray(person.keypoints)) candidates.push(person.keypoints as any);
+        if (Array.isArray(person.joints)) candidates.push(person.joints as any);
+        if (Array.isArray(person.pose)) candidates.push(person.pose as any);
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { valid: 0, total: 17 };
+  }
+
+  const points = candidates[0];
+  const valid = points.filter((point) => typeof point?.x === 'number' && typeof point?.y === 'number').length;
+  return { valid, total: Math.max(17, valid) };
+}
 
 onMounted(() => {
   fpsTick = window.setInterval(() => {
@@ -21,18 +50,35 @@ onMounted(() => {
     mockFps.value = 28 + Math.floor(Math.random() * 4);
     mockJoints.value = { valid: 14 + Math.floor(Math.random() * 3), total: 17 };
   }, 1000);
+
+  removePoseListener = window.irisStarter.onPoseData((frame) => {
+    livePose.value = (frame as PoseFrame) ?? null;
+    const poseStats = extractPoseCount(livePose.value);
+    if (poseStats.valid > 0) {
+      mockJoints.value = poseStats;
+      mockFps.value = 30;
+    }
+  });
 });
 
 onUnmounted(() => {
   if (fpsTick !== undefined) window.clearInterval(fpsTick);
+  removePoseListener?.();
 });
 
 function onCameraSetupContinue(config: CameraConfig[]) {
   cameras.value = config;
-  void window.irisStarter.saveSessionConfig({ cameras: config });
   cameraSetupOpen.value = false;
   phase.value = 'calibration';
   calibrationOpen.value = true;
+
+  try {
+    if (window.irisStarter?.saveSessionConfig) {
+      void window.irisStarter.saveSessionConfig({ cameras: config });
+    }
+  } catch {
+    // ignore missing or failing bridge; navigation should still continue
+  }
 }
 
 function onCameraSetupClose() {
@@ -85,6 +131,7 @@ function reopenCalibration() {
         :fps="mockFps"
         :joints-valid="mockJoints.valid"
         :joints-total="mockJoints.total"
+        :pose="livePose"
       />
       <div v-else class="placeholder">
         <p>{{ phase === 'camera-setup' ? 'Configure cameras to begin.' : 'Run calibration to continue.' }}</p>
@@ -114,6 +161,7 @@ function reopenCalibration() {
     />
     <CalibrationModal
       :open="phase === 'calibration' && calibrationOpen"
+      :cameras="cameras"
       @complete="onCalibrationComplete"
       @close="onCalibrationClose"
     />

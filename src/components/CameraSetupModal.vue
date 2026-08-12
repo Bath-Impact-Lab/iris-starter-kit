@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { CameraConfig, CameraDevice } from '../types';
-import { FPS_OPTIONS, RESOLUTIONS, ROTATION_OPTIONS } from '../data/mock';
-import { ensurePermission, listVideoInputs, probeCamera, selectCommonConfig, startCameraLogger } from '../utils/camera-probe';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import type { CameraConfig, CameraDevice, Resolution } from '../types';
+import { ROTATION_OPTIONS } from '../data/mock';
+import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig, startCameraLogger } from '../utils/camera-probe';
 import AppModal from './AppModal.vue';
 
 const props = defineProps<{
@@ -15,12 +15,37 @@ const emit = defineEmits<{
 }>();
 
 const cameras = ref<CameraConfig[]>([]);
+const deviceProfiles = ref<CameraDevice[]>([]);
 const expandedIds = ref<Set<string>>(new Set());
 const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
 const loading = ref(false);
 const loggers = ref<Record<string, { stop: () => void }>>({});
+
+const selectableResolutions = computed<Resolution[]>(() => {
+  const common = getCommonResolutionOptions(deviceProfiles.value);
+  if (common.length > 0) return common;
+
+  const unique = new Set<Resolution>();
+  for (const cam of cameras.value) {
+    unique.add(cam.resolution);
+  }
+  const values = [...unique].sort((a, b) => {
+    const aSize = Number(a.split('x')[0]) * Number(a.split('x')[1]);
+    const bSize = Number(b.split('x')[0]) * Number(b.split('x')[1]);
+    return bSize - aSize;
+  });
+  return values.length > 0 ? values : ['1280x720' as Resolution];
+});
+
+const selectableFps = computed<number[]>(() => {
+  const common = getCommonFpsOptions(deviceProfiles.value);
+  if (common.length > 0) return common;
+
+  const values = [...new Set(cameras.value.map((cam) => cam.fps))].sort((a, b) => b - a);
+  return values.length > 0 ? values : [30];
+});
 
 function defaultConfig(device: CameraDevice, index: number): CameraConfig {
   const friendlyLabel = device.label && device.label.trim() ? device.label : `Camera ${index + 1}`;
@@ -39,7 +64,11 @@ async function loadCameras() {
     await ensurePermission();
     const devices = await listVideoInputs();
     const probed = await Promise.all(devices.map((d) => probeCamera(d.deviceId)));
-    const common = selectCommonConfig(probed as CameraDevice[]);
+    deviceProfiles.value = probed as CameraDevice[];
+    const common = selectCommonConfig(deviceProfiles.value);
+    const preferredResolution = common.resolution ?? '1920x1080';
+    const preferredFps = common.fps ?? 30;
+
     cameras.value = probed.map((device, index) => {
       const dev = device as CameraDevice;
       const base = defaultConfig(dev, index);
@@ -55,8 +84,8 @@ async function loadCameras() {
       return {
         ...base,
         label: persisted?.displayName ?? base.label,
-        resolution: common.resolution ?? base.resolution,
-        fps: common.fps ?? base.fps,
+        resolution: preferredResolution,
+        fps: preferredFps,
         rotation: persisted?.rotation ?? base.rotation,
       } as CameraConfig;
     });
@@ -67,8 +96,10 @@ async function loadCameras() {
     // fallback to existing bridge if present
     if ((window as any).irisStarter && (window as any).irisStarter.listCameras) {
       const devices = await (window as any).irisStarter.listCameras();
+      deviceProfiles.value = devices as CameraDevice[];
       cameras.value = devices.map((device: CameraDevice, index: number) => defaultConfig(device, index));
     } else {
+      deviceProfiles.value = [];
       cameras.value = [];
     }
   } finally {
@@ -212,7 +243,22 @@ onUnmounted(() => {
   stopAllPreviews();
 });
 
+function persistCameraConfig() {
+  cameras.value.forEach((cam) => {
+    const key = `camera-config:${cam.deviceId}`;
+    const prevRaw = localStorage.getItem(key);
+    const prev = prevRaw ? JSON.parse(prevRaw) : {};
+    const next = { ...(prev || {}), displayName: cam.label, rotation: cam.rotation, resolution: cam.resolution, fps: cam.fps };
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  });
+}
+
 function onContinue() {
+  persistCameraConfig();
   emit('continue', cameras.value);
 }
 
@@ -225,7 +271,7 @@ function onDisplayNameChange(cam: CameraConfig) {
   try {
     const prevRaw = localStorage.getItem(key);
     const prev = prevRaw ? JSON.parse(prevRaw) : {};
-    const next = { ...(prev || {}), displayName: cam.label, rotation: cam.rotation };
+    const next = { ...(prev || {}), displayName: cam.label, rotation: cam.rotation, resolution: cam.resolution, fps: cam.fps };
     localStorage.setItem(key, JSON.stringify(next));
   } catch {
     // ignore
@@ -279,14 +325,14 @@ function onDisplayNameChange(cam: CameraConfig) {
             <label class="field">
               <span>Resolution</span>
               <select v-model="cam.resolution">
-                <option v-for="r in RESOLUTIONS" :key="r" :value="r">{{ r }}</option>
+                <option v-for="r in selectableResolutions" :key="r" :value="r">{{ r }}</option>
               </select>
             </label>
 
             <label class="field">
               <span>FPS</span>
               <select v-model.number="cam.fps">
-                <option v-for="f in FPS_OPTIONS" :key="f" :value="f">{{ f }}</option>
+                <option v-for="f in selectableFps" :key="f" :value="f">{{ f }}</option>
               </select>
             </label>
 

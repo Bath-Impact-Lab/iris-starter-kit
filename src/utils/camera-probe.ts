@@ -1,42 +1,64 @@
 import type { CameraDevice, Resolution } from '../types';
 import { RESOLUTIONS, FPS_OPTIONS } from '../data/mock';
 
-function parseResolution(res: string) {
+function parseResolution(res: string): { w: number; h: number } {
   const [w, h] = res.split('x').map((v) => parseInt(v, 10));
-  return { w, h };
+  return { w: Number.isFinite(w) ? w : 0, h: Number.isFinite(h) ? h : 0 };
+}
+
+export function getCommonResolutionOptions(devices: CameraDevice[]): Resolution[] {
+  const options = [...RESOLUTIONS] as Resolution[];
+  if (devices.length === 0) return options;
+
+  return options
+    .filter((resolution) => {
+      const target = parseResolution(resolution);
+      return devices.every((device) => {
+        if (!device.maxResolution) return false;
+        const max = parseResolution(device.maxResolution);
+        return target.w <= max.w && target.h <= max.h;
+      });
+    })
+    .sort((a, b) => {
+      const aSize = parseResolution(a).w * parseResolution(a).h;
+      const bSize = parseResolution(b).w * parseResolution(b).h;
+      return bSize - aSize;
+    });
+}
+
+export function getCommonFpsOptions(devices: CameraDevice[]): number[] {
+  const options = [...FPS_OPTIONS] as number[];
+  if (devices.length === 0) return options;
+
+  return options
+    .filter((value) => devices.every((device) => device.maxFps == null || value <= device.maxFps))
+    .sort((a, b) => b - a);
 }
 
 export function selectCommonConfig(devices: CameraDevice[]) {
-  const validResolutions = RESOLUTIONS.filter((resolution) => {
-    const target = parseResolution(resolution);
-    return devices.every((device) => {
-      if (!device.maxResolution) return false;
-      const max = parseResolution(device.maxResolution);
-      return target.w <= max.w && target.h <= max.h;
-    });
-  });
+  const resolutionOptions = getCommonResolutionOptions(devices);
+  const fpsOptions = getCommonFpsOptions(devices);
 
-  const resolution = validResolutions.length ? validResolutions[validResolutions.length - 1] : undefined;
-  const minMaxFps = devices.reduce((current, device) => {
-    if (device.maxFps == null) return current;
-    return Math.min(current, device.maxFps);
-  }, Infinity);
-  const fps = FPS_OPTIONS.filter((value) => value <= minMaxFps).pop() ?? 30;
-
-  return { resolution, fps };
+  return {
+    resolution: resolutionOptions[0] ?? ('1280x720' as Resolution),
+    fps: fpsOptions[0] ?? 30,
+  };
 }
 
 function pickClosestResolution(width: number, height: number): Resolution {
-  let best: Resolution = RESOLUTIONS[0];
+  const resolutions = [...RESOLUTIONS] as Resolution[];
+  let best: Resolution = resolutions[0] ?? ('1280x720' as Resolution);
   let bestDiff = Infinity;
-  for (const r of RESOLUTIONS) {
+
+  for (const r of resolutions) {
     const { w, h } = parseResolution(r);
     const diff = Math.abs(w - width) + Math.abs(h - height);
     if (diff < bestDiff) {
       bestDiff = diff;
-      best = r as Resolution;
+      best = r;
     }
   }
+
   return best;
 }
 

@@ -1,6 +1,6 @@
 export type AppPhase = 'camera-setup' | 'calibration' | 'live';
 
-export type Resolution = '1280x720' | '1920x1080' | '2560x1440';
+export type Resolution = `${number}x${number}`;
 
 export interface CameraDevice {
   id: string;
@@ -22,4 +22,18 @@ export interface CameraConfig {
 
 export interface SessionConfig {
   cameras: CameraConfig[];
+}
+
+export interface PoseKeypoint {
+  x: number;
+  y: number;
+  confidence?: number;
+  visible?: number;
+}
+
+export interface PoseFrame {
+  keypoints?: PoseKeypoint[];
+  joints?: PoseKeypoint[];
+  pose?: PoseKeypoint[];
+  people?: Array<{ keypoints?: PoseKeypoint[]; joints?: PoseKeypoint[]; pose?: PoseKeypoint[] }>;
 }
