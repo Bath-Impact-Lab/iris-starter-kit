@@ -155,7 +155,6 @@ type CameraLogEntry = {
 export function startCameraLogger(videoEl: HTMLVideoElement, deviceId: string) {
   let rafId: number | null = null;
   let frameCount = 0;
-  let lastTs = performance.now();
   let lastSampleTs = performance.now();
   const logs: CameraLogEntry[] = [];
 
