@@ -16,6 +16,10 @@ const livePose = ref<PoseFrame | null>(null);
 let fpsTick: number | undefined;
 let removePoseListener: (() => void) | null = null;
 
+function getIrisApi(): any {
+  return (window as any).irisStarter ?? (window as any).starterKit ?? (window as any).irisDispatcher ?? null;
+}
+
 function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number; total: number } {
   const candidates: Array<Array<{ x?: number; y?: number; visible?: number; confidence?: number }>> = [];
 
@@ -45,26 +49,92 @@ function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number;
 }
 
 onMounted(() => {
+  const api = getIrisApi();
+
   fpsTick = window.setInterval(() => {
     if (phase.value !== 'live') return;
     mockFps.value = 28 + Math.floor(Math.random() * 4);
     mockJoints.value = { valid: 14 + Math.floor(Math.random() * 3), total: 17 };
   }, 1000);
 
-  removePoseListener = window.irisStarter.onPoseData((frame) => {
-    livePose.value = (frame as PoseFrame) ?? null;
-    const poseStats = extractPoseCount(livePose.value);
-    if (poseStats.valid > 0) {
-      mockJoints.value = poseStats;
-      mockFps.value = 30;
-    }
-  });
+  if (api?.onPoseData) {
+    removePoseListener = api.onPoseData((frame: unknown) => {
+      livePose.value = (frame as PoseFrame) ?? null;
+      const poseStats = extractPoseCount(livePose.value);
+      if (poseStats.valid > 0) {
+        mockJoints.value = poseStats;
+        mockFps.value = 30;
+      }
+    });
+  }
+
+  if (api?.subscribe) {
+    api.subscribe((status: unknown) => {
+      console.log('[starter-kit] iris status:', status);
+    });
+  }
 });
 
 onUnmounted(() => {
   if (fpsTick !== undefined) window.clearInterval(fpsTick);
   removePoseListener?.();
+
+  try {
+    const api = getIrisApi();
+    void api?.stopAll?.();
+  } catch {
+    // ignore shutdown issues while tearing down the UI
+  }
 });
+
+async function startIrisRun(config: CameraConfig[]) {
+  const api = getIrisApi();
+  if (!api || typeof api.startRun !== 'function') {
+    console.warn('[starter-kit] IRIS backend is unavailable; skipping startRun');
+    return;
+  }
+
+  try {
+    const payload = {
+      run_id: `starter-${Date.now()}`,
+      camera_width: 1920,
+      camera_height: 1080,
+      video_fps: 30,
+      cameras: config.map((cam) => ({
+        id: cam.deviceId,
+        label: cam.label,
+        resolution: cam.resolution,
+        fps: cam.fps,
+        rotation: cam.rotation,
+      })),
+    };
+
+    const runResult = await api.startRun(payload);
+    console.log('[starter-kit] startRun:', runResult);
+  } catch (error) {
+    console.warn('[starter-kit] startRun failed:', error);
+  }
+}
+
+async function openIrisPreview() {
+  const api = getIrisApi();
+  if (!api || typeof api.openPreviewMonitor !== 'function') {
+    console.warn('[starter-kit] IRIS backend is unavailable; skipping preview monitor');
+    return;
+  }
+
+  try {
+    const result = await api.openPreviewMonitor({
+      sharedMemoryName: 'iris_shm_ipc',
+      outputDirectory: process.cwd(),
+      posePipePath: '\\\\.\\pipe\\iris_ipc',
+      verbose: false,
+    });
+    console.log('[starter-kit] openPreviewMonitor:', result);
+  } catch (error) {
+    console.warn('[starter-kit] openPreviewMonitor failed:', error);
+  }
+}
 
 function onCameraSetupContinue(config: CameraConfig[]) {
   cameras.value = config;
@@ -73,12 +143,15 @@ function onCameraSetupContinue(config: CameraConfig[]) {
   calibrationOpen.value = true;
 
   try {
-    if (window.irisStarter?.saveSessionConfig) {
-      void window.irisStarter.saveSessionConfig({ cameras: config });
+    const api = getIrisApi();
+    if (api?.saveSessionConfig) {
+      void api.saveSessionConfig({ cameras: config });
     }
   } catch {
     // ignore missing or failing bridge; navigation should still continue
   }
+
+  void startIrisRun(config);
 }
 
 function onCameraSetupClose() {
@@ -88,6 +161,7 @@ function onCameraSetupClose() {
 function onCalibrationComplete() {
   calibrationOpen.value = false;
   phase.value = 'live';
+  void openIrisPreview();
 }
 
 function onCalibrationClose() {

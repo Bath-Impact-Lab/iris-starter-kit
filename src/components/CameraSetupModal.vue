@@ -94,8 +94,8 @@ async function loadCameras() {
     } catch {}
   } catch (err) {
     // fallback to existing bridge if present
-    if ((window as any).irisStarter && (window as any).irisStarter.listCameras) {
-      const devices = await (window as any).irisStarter.listCameras();
+    if ((window as any).starterKit && (window as any).starterKit.listCameras) {
+      const devices = await (window as any).starterKit.listCameras();
       deviceProfiles.value = devices as CameraDevice[];
       cameras.value = devices.map((device: CameraDevice, index: number) => defaultConfig(device, index));
     } else {

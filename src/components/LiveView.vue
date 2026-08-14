@@ -1,12 +1,49 @@
 <script setup lang="ts">
-import type { CameraConfig } from '../types';
+import { computed } from 'vue';
+import type { CameraConfig, PoseFrame, PoseKeypoint } from '../types';
 
-defineProps<{
+const props = defineProps<{
   cameras: CameraConfig[];
   fps: number;
   jointsValid: number;
   jointsTotal: number;
+  pose?: PoseFrame | null;
 }>();
+
+const posePoints = computed<PoseKeypoint[]>(() => {
+  const source = props.pose ?? null;
+  const candidates: PoseKeypoint[][] = [];
+
+  if (source) {
+    if (Array.isArray(source.keypoints)) candidates.push(source.keypoints as PoseKeypoint[]);
+    if (Array.isArray(source.joints)) candidates.push(source.joints as PoseKeypoint[]);
+    if (Array.isArray(source.pose)) candidates.push(source.pose as PoseKeypoint[]);
+    if (Array.isArray(source.people)) {
+      for (const person of source.people) {
+        if (person) {
+          if (Array.isArray(person.keypoints)) candidates.push(person.keypoints as PoseKeypoint[]);
+          if (Array.isArray(person.joints)) candidates.push(person.joints as PoseKeypoint[]);
+          if (Array.isArray(person.pose)) candidates.push(person.pose as PoseKeypoint[]);
+        }
+      }
+    }
+  }
+
+  const points = candidates[0] ?? [];
+  return points.filter((point) => typeof point?.x === 'number' && typeof point?.y === 'number');
+});
+
+const skeletonPairs = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [1, 5], [5, 6], [6, 7],
+  [1, 8], [8, 9], [9, 10],
+  [8, 11], [11, 12], [12, 13],
+  [11, 14], [14, 15], [15, 16],
+];
+
+function pointAt(index: number) {
+  return posePoints.value[index] ?? null;
+}
 </script>
 
 <template>
@@ -29,7 +66,13 @@ defineProps<{
         <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} fps</span>
       </header>
       <div class="feed mocap-feed">
-        <svg viewBox="0 0 120 200" class="skeleton" aria-hidden="true">
+        <svg v-if="posePoints.length >= 17" viewBox="0 0 120 200" class="skeleton" aria-hidden="true">
+          <g>
+            <line v-for="([a, b], index) in skeletonPairs" :key="index" v-if="pointAt(a) && pointAt(b)" :x1="pointAt(a)?.x" :y1="pointAt(a)?.y" :x2="pointAt(b)?.x" :y2="pointAt(b)?.y" stroke="#6b9fff" stroke-width="2" />
+            <circle v-for="(point, index) in posePoints.slice(0, 17)" :key="index" :cx="point.x" :cy="point.y" r="4" fill="#6b9fff" stroke="#dfe8ff" stroke-width="1" />
+          </g>
+        </svg>
+        <svg v-else viewBox="0 0 120 200" class="skeleton" aria-hidden="true">
           <circle cx="60" cy="24" r="10" fill="none" stroke="#6b9fff" stroke-width="2" />
           <line x1="60" y1="34" x2="60" y2="90" stroke="#6b9fff" stroke-width="2" />
           <line x1="60" y1="50" x2="30" y2="75" stroke="#6b9fff" stroke-width="2" />
