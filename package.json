@@ -17,7 +17,8 @@
     "build:preload": "tsc -p electron/tsconfig.preload.json",
     "test:iris": "npm run build:electron && vitest run electron/iris/resolveIrisExecutable.test.ts electron/iris/pipeServer.test.ts electron/iris/videoPipeReader.test.ts && node --test dist-electron/iris/config.test.js",
     "preview": "npm run build && cross-env NODE_ENV=production electron .",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "package": "npm run build && electron-builder --win"
   },
   "dependencies": {
     "vue": "^3.5.13",
@@ -29,6 +30,7 @@
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^34.0.2",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
     "vitest": "^4.1.11",
@@ -36,11 +38,28 @@
     "wait-on": "^8.0.2"
   },
   "build": {
+    "appId": "uk.ac.bath.impactlab.iris-starter-kit",
+    "productName": "IRIS Starter Kit",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
     "extraResources": [
       {
         "from": "resources/iris",
         "to": "resources/iris"
       }
-    ]
+    ],
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
