@@ -10,7 +10,7 @@ interface CameraDevice {
   defaultRotation?: number;
 }
 
-interface SessionConfig {
+interface RunConfig {
   cameras: Array<{
     deviceId: string;
     label: string;
@@ -23,12 +23,10 @@ interface SessionConfig {
 const irisApi = {
   version: '0.1.0',
   platform: process.platform,
-  getAppInfo: () => ipcRenderer.invoke('app:get-info'),
   listCameras: () => ipcRenderer.invoke('cameras:list') as Promise<CameraDevice[]>,
-  saveSessionConfig: (config: SessionConfig) => ipcRenderer.invoke('session:save-config', config),
-  startSession: (options?: Record<string, any>) => ipcRenderer.invoke('session:start', options),
-  startPoseStream: (options?: Record<string, any>) => ipcRenderer.invoke('session:start-stream', options),
-  stopSession: (sessionId?: string) => ipcRenderer.invoke('session:stop', sessionId),
+  saveRunConfig: (config: RunConfig) => ipcRenderer.invoke('run:save-config', config),
+  startPoseStream: (options?: Record<string, any>) => ipcRenderer.invoke('run:start-stream', options),
+  stopRun: (runId?: string) => ipcRenderer.invoke('run:stop', runId),
   startRun: (input?: Record<string, any>) => ipcRenderer.invoke('iris:start-run', input),
   openPreviewMonitor: (input?: Record<string, any>) => ipcRenderer.invoke('iris:open-preview-monitor', input),
   closePreviewMonitor: () => ipcRenderer.invoke('iris:close-preview-monitor'),
@@ -39,7 +37,6 @@ const irisApi = {
     return () => ipcRenderer.removeListener('iris:status', handler);
   },
   stopAll: () => ipcRenderer.invoke('iris:stop-all'),
-  shutdown: () => ipcRenderer.invoke('iris:shutdown'),
   onPoseData: (callback: (frame: unknown) => void) => {
     const handler = (_event: unknown, frame: unknown) => callback(frame);
     ipcRenderer.on('iris:pose', handler);
@@ -53,4 +50,3 @@ const irisApi = {
 };
 
 contextBridge.exposeInMainWorld('irisStarter', irisApi);
-contextBridge.exposeInMainWorld('starterKit', irisApi);

@@ -123,11 +123,7 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   const modelDir = IRIS_MODEL_DIR.replace(/\\/g, '/');
   const outputDir = IRIS_CALIBRATION_DIR.replace(/\\/g, '/');
 
-  // IRIS's spec parser (core/include/iris/core/spec.hpp) requires a top-level
-  // "runtime" object; there is no standalone "calibration" pipeline stage.
-  // DA3 startup calibration runs inline as part of the triangulation stage of
-  // the full pipeline, and continues into live pose triangulation once it
-  // converges -- see IRIS/specs/pipeline.example.json.
+  // No standalone "calibration" stage -- see dont commit/IRIS-INTEGRATION-NOTES.md.
   return {
     run_id: runId,
     runtime: {

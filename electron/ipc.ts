@@ -5,8 +5,6 @@ import { promisify } from 'node:util';
 import { ProcessManager } from './iris/processManager.js';
 
 const execFileAsync = promisify(execFile);
-const processManager = new ProcessManager();
-
 interface CameraDevice {
   id: string;
   label: string;
@@ -51,7 +49,7 @@ function sendPoseFrame(event: Electron.IpcMainInvokeEvent, frame: unknown) {
   }
 }
 
-function emitStatusToAllWindows() {
+function emitStatusToAllWindows(processManager: ProcessManager) {
   const status = processManager.getStatus();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
@@ -60,16 +58,11 @@ function emitStatusToAllWindows() {
   }
 }
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(processManager: ProcessManager): void {
   processManager.subscribe((status) => {
-    emitStatusToAllWindows();
+    emitStatusToAllWindows(processManager);
     console.log('[iris-dispatcher] status ->', status);
   });
-
-  ipcMain.handle('app:get-info', () => ({
-    version: '0.1.0',
-    platform: process.platform,
-  }));
 
   ipcMain.handle('cameras:list', async () => await listWindowsCameras());
 
@@ -89,8 +82,8 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('iris:open-preview-monitor', async (_event, input = {}) => {
-    await processManager.openPreviewMonitor(input);
-    return processManager.getStatus();
+    const { videoStreams } = await processManager.openPreviewMonitor(input);
+    return { ...processManager.getStatus(), videoStreams };
   });
 
   ipcMain.handle('iris:close-preview-monitor', async () => {
@@ -103,31 +96,10 @@ export function registerIpcHandlers(): void {
     return processManager.getStatus();
   });
 
-  ipcMain.handle('iris:shutdown', async () => {
-    await processManager.shutdown();
-    return processManager.getStatus();
-  });
-
-  ipcMain.handle('session:start', async (event, options = {}) => {
-    const sessionId = randomUUID();
-    const result = await processManager.startStandard({
-      sessionId,
-      options,
-      onCliOutput: (payload) => {
-        const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-        if (targetWindow && !targetWindow.isDestroyed()) {
-          targetWindow.webContents.send('iris:cli-output', payload);
-        }
-      },
-    });
-
-    return result;
-  });
-
-  ipcMain.handle('session:start-stream', async (event, options = {}) => {
-    const sessionId = randomUUID();
+  ipcMain.handle('run:start-stream', async (event, options = {}) => {
+    const runId = randomUUID();
     const result = await processManager.startStream({
-      sessionId,
+      sessionId: runId,
       options,
       onCliOutput: (payload) => {
         const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
@@ -141,7 +113,7 @@ export function registerIpcHandlers(): void {
     return result;
   });
 
-  ipcMain.handle('session:stop', (_event, sessionId?: string) => processManager.stop(sessionId ?? ''));
+  ipcMain.handle('run:stop', (_event, runId?: string) => processManager.stop(runId ?? ''));
 
-  ipcMain.handle('session:save-config', () => ({ ok: true }));
+  ipcMain.handle('run:save-config', () => ({ ok: true }));
 }

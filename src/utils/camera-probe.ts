@@ -122,30 +122,6 @@ export async function probeCamera(deviceId: string): Promise<CameraDevice> {
     }
 
     const maxFps = fpsRange ? Math.round(Math.min(fpsRange.max, 60)) : (settings.frameRate ? Math.round(settings.frameRate as number) : undefined);
-    const availableResolutions = RESOLUTIONS.filter((resolution) => {
-      if (!maxResolution || !widthRange || !heightRange) return false;
-      const { w, h } = parseResolution(resolution);
-      return w <= widthRange.max && h <= heightRange.max;
-    });
-    const availableFps = fpsRange ? FPS_OPTIONS.filter((value) => value >= fpsRange.min && value <= fpsRange.max) : (settings.frameRate ? [Math.round(settings.frameRate as number)] : []);
-
-    // log raw capabilities and settings for inspect/devtools
-    try {
-      console.log('[probeCamera] deviceId=', deviceId, {
-        capabilities,
-        settings,
-        widthRange,
-        heightRange,
-        fpsRange,
-        availableResolutions,
-        availableFps,
-        suggestedResolution,
-        suggestedFps,
-        maxResolution,
-        maxFps,
-        defaultRotation,
-      });
-    } catch {}
 
     track.stop();
 
@@ -166,54 +142,4 @@ export async function probeCamera(deviceId: string): Promise<CameraDevice> {
       defaultRotation: 0,
     };
   }
-}
-
-type CameraLogEntry = {
-  ts: number;
-  settings: Record<string, any>;
-  estimatedFps?: number;
-};
-
-export function startCameraLogger(videoEl: HTMLVideoElement, deviceId: string) {
-  let rafId: number | null = null;
-  let frameCount = 0;
-  let lastSampleTs = performance.now();
-  const logs: CameraLogEntry[] = [];
-
-  function onFrame() {
-    frameCount++;
-    const now = performance.now();
-    if (now - lastSampleTs >= 1000) {
-      const estFps = Math.round((frameCount * 1000) / (now - lastSampleTs));
-      // attempt to read settings from the underlying track
-      const stream = videoEl.srcObject as MediaStream | null;
-      const track = stream ? stream.getVideoTracks()[0] : null;
-      const settings = track && (track.getSettings ? track.getSettings() : {}) || {};
-      const entry: CameraLogEntry = { ts: Date.now(), settings, estimatedFps: estFps };
-      logs.push(entry);
-      try {
-        const prev = localStorage.getItem(`camera-log:${deviceId}`);
-        const arr = prev ? JSON.parse(prev) : [];
-        arr.push(entry);
-        localStorage.setItem(`camera-log:${deviceId}`, JSON.stringify(arr.slice(-500)));
-      } catch {
-        // ignore storage errors
-      }
-      console.log('[camera-log]', deviceId, entry);
-      frameCount = 0;
-      lastSampleTs = now;
-    }
-    rafId = requestAnimationFrame(onFrame);
-  }
-
-  rafId = requestAnimationFrame(onFrame);
-
-  return {
-    stop() {
-      if (rafId) cancelAnimationFrame(rafId);
-    },
-    getLogs() {
-      return logs.slice();
-    },
-  };
 }

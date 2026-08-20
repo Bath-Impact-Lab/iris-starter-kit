@@ -21,6 +21,8 @@ let cleanupPoseListener: (() => void) | null = null;
 let cleanupCliListener: (() => void) | null = null;
 
 function updateFromCli(payload: { channel: string; line: string }) {
+  if (status.value === 'done') return;
+
   const text = payload.line ?? '';
   if (!text) return;
 
@@ -31,31 +33,31 @@ function updateFromCli(payload: { channel: string; line: string }) {
   if (/done|complete|ready|success/i.test(text)) {
     status.value = 'done';
     progress.value = 100;
+    detachListeners();
     emit('complete');
   }
 }
 
 function getIrisApi(): any {
-  console.log('=================================Getting IRIS API...');
-  console.log('=================================Window object:', window?.irisStarter);
   return (window as any).irisStarter ?? null;
 }
 
 function attachListeners() {
   const api = getIrisApi();
 
-  console.log('=================================Attaching IRIS listeners...', api);
   if (!api?.onPoseData || !api?.onCliOutput) return;
 
   cleanupPoseListener = api.onPoseData((frame: unknown) => {
+    if (status.value === 'done') return;
+
     const value = frame as Record<string, any>;
     if (!value || typeof value !== 'object') return;
 
-    const joints = value.joints ?? value.keypoints ?? value.people ?? value.pose ?? [];
-    const hasPoseData = Array.isArray(joints) ? joints.length > 0 : Boolean(joints);
-    if (hasPoseData) {
+    const people = Array.isArray(value.people) ? value.people : [];
+    if (people.length > 0) {
       status.value = 'done';
       progress.value = 100;
+      detachListeners();
       emit('complete');
     }
   });
@@ -83,18 +85,12 @@ async function startCalibration() {
     return;
   }
 
-  console.log('=================================Starting IRIS calibration...');
   status.value = 'running';
   progress.value = 0;
   error.value = null;
   attachListeners();
 
   try {
-
-    console.log('=================================Starting IRIS pose stream...');
-     
-
-
     const result = await api.startPoseStream({
       mode: 'da3_startup',
       cameras: props.cameras.map((cam) => ({

@@ -11,19 +11,23 @@
     "build": "npm run build:electron && npm run build:preload && vue-tsc --noEmit && vite build",
     "build:electron": "tsc -p electron/tsconfig.json",
     "build:preload": "tsc -p electron/tsconfig.preload.json",
+    "test:iris": "npm run build:electron && vitest run electron/iris/resolveIrisExecutable.test.ts electron/iris/pipeServer.test.ts electron/iris/videoPipeReader.test.ts && node --test dist-electron/iris/config.test.js",
     "preview": "npm run build && cross-env NODE_ENV=production electron .",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "electron": "^34.0.2",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
+    "vitest": "^4.1.11",
     "vue-tsc": "^2.2.0",
     "wait-on": "^8.0.2"
   },

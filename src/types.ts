@@ -20,20 +20,29 @@ export interface CameraConfig {
   rotation: number;
 }
 
-export interface SessionConfig {
+export interface RunConfig {
   cameras: CameraConfig[];
 }
 
-export interface PoseKeypoint {
-  x: number;
-  y: number;
-  confidence?: number;
-  visible?: number;
+// Matches the JSON written by IRIS's pose pipe
+// (core/knect/utils/pose_stream_writer.cpp): per person, `points_2d` holds
+// one entry per shared-memory joint slot, each an array of [u, v] raw pixel
+// pairs -- one pair per camera. COCO-17 body joints are indices 0..16.
+export interface PosePerson {
+  person_id?: number;
+  points_2d?: Array<Array<[number, number]>>;
+  joint_centers?: unknown;
+  joint_angles?: unknown;
 }
 
 export interface PoseFrame {
-  keypoints?: PoseKeypoint[];
-  joints?: PoseKeypoint[];
-  pose?: PoseKeypoint[];
-  people?: Array<{ keypoints?: PoseKeypoint[]; joints?: PoseKeypoint[]; pose?: PoseKeypoint[] }>;
+  frame_seq?: number;
+  timestamp?: number;
+  slot_timestamp?: number;
+  people?: PosePerson[];
+}
+
+export interface VideoStreamDescriptor {
+  cameraId: number;
+  url: string;
 }

@@ -2,6 +2,8 @@ import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerIpcHandlers } from './ipc.js';
+import { ProcessManager } from './iris/processManager.js';
+import { IrisRunStore } from './iris/runStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,7 +45,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  registerIpcHandlers();
+  const processManager = new ProcessManager({ runStore: new IrisRunStore(app.getPath('userData')) });
+  registerIpcHandlers(processManager);
   createWindow();
 
   app.on('activate', () => {

@@ -1,28 +1,16 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { PIPE_NAME, buildConfigFromOptions, getIrisCliMissingMessage, getIrisCliPath } from './config.js'
 import { createPipeServer } from './pipeServer.js'
+import { createVideoPipeReader } from './videoPipeReader.js'
+import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
 import { IrisRunStore } from './runStore.js'
 import { writeTempConfigFile } from './utils.js'
 
-// IRIS's `run` pipeline and `monitor` process are two independent CLI
-// invocations, not a sequential start -> calibrate -> mocap chain. `run`
-// stays alive as ONE continuous process: it opens cameras, warms up
-// detection/pose/triangulation, runs DA3 startup calibration inline inside
-// the triangulation stage, then keeps streaming live 3D poses for mocap --
-// all in the same process, without restarting. `monitor` is a separate,
-// short-lived process that attaches to that run's shared-memory output and
-// relays frames to us over the named pipe; it can be started, stopped, and
-// restarted (e.g. swapping the calibration-view monitor for the live-preview
-// monitor) without touching the underlying `run` process at all.
-//
-// These strings are copied verbatim from the IRIS C++ source so the markers
-// stay exact even if the surrounding log formatting changes:
-//   run:     core/src/pipeline_runtime.cpp   ("Pipeline warmup complete")
-//   run:     core/stages/triangulation/triangulation.cpp
-//              ("Waiting for startup DA3 calibration batch",
-//               "Initialized live calibration from DA3 batch")
-//   monitor: core/knect/monitor.cpp          ("Successfully attached to Shared Memory")
+// `run` and `monitor` are independent IRIS processes, not a sequential
+// start -> calibrate -> mocap chain; see dont commit/IRIS-INTEGRATION-NOTES.md.
+// Marker strings below are copied verbatim from the IRIS C++ source.
 const IRIS_MILESTONES: Array<{ marker: string; describe: (line: string) => string }> = [
   {
     marker: 'Pipeline warmup complete',
@@ -71,6 +59,8 @@ export interface ProcessManagerDependencies {
   getExecutablePath?: () => string
   getMissingMessage?: () => string
   createPipeServer?: typeof createPipeServer
+  createVideoPipeReader?: typeof createVideoPipeReader
+  videoRelayServer?: VideoRelayServer
   writeTempConfigFile?: typeof writeTempConfigFile
   pipeName?: string
 }
@@ -113,7 +103,7 @@ export interface OpenIrisMonitorInput {
   sharedMemoryName?: string
   outputDirectory?: string
   posePipePath?: string
-  videoPipes?: Array<{ cameraIndex: number; pipePath: string }>
+  cameraCount?: number
   targetFps?: number
   savePoses?: boolean
   drawBoundingBoxes?: boolean
@@ -121,19 +111,6 @@ export interface OpenIrisMonitorInput {
   drawIds?: boolean
   drawCaptureVolume?: boolean
   verbose?: boolean
-}
-
-export interface IrisProcessResult {
-  exitCode: number | null
-  stopped: boolean
-  stdout?: string
-  stderr?: string
-}
-
-export interface IrisRun {
-  ready: Promise<void>
-  completion: Promise<IrisProcessResult>
-  stop: () => Promise<void>
 }
 
 export type StatusListener = (status: IrisDispatcherStatus) => void
@@ -146,6 +123,8 @@ export class ProcessManager {
   private readonly resolveExecutablePath: NonNullable<ProcessManagerDependencies['getExecutablePath']>
   private readonly resolveMissingMessage: NonNullable<ProcessManagerDependencies['getMissingMessage']>
   private readonly openPipeServer: NonNullable<ProcessManagerDependencies['createPipeServer']>
+  private readonly openVideoPipeReader: NonNullable<ProcessManagerDependencies['createVideoPipeReader']>
+  private readonly videoRelay: VideoRelayServer
   private readonly createTempConfig: NonNullable<ProcessManagerDependencies['writeTempConfigFile']>
   private readonly pipeName: string
   private status: IrisDispatcherStatus = {
@@ -170,8 +149,14 @@ export class ProcessManager {
     this.resolveExecutablePath = dependencies.getExecutablePath ?? getIrisCliPath
     this.resolveMissingMessage = dependencies.getMissingMessage ?? getIrisCliMissingMessage
     this.openPipeServer = dependencies.createPipeServer ?? createPipeServer
+    this.openVideoPipeReader = dependencies.createVideoPipeReader ?? createVideoPipeReader
+    this.videoRelay = dependencies.videoRelayServer ?? new VideoRelayServer()
     this.createTempConfig = dependencies.writeTempConfigFile ?? writeTempConfigFile
     this.pipeName = dependencies.pipeName ?? PIPE_NAME
+  }
+
+  private videoPipeName(cameraIndex: number): string {
+    return `\\\\.\\pipe\\iris_video_${cameraIndex}`
   }
 
   private emitStatus(partial: Partial<IrisDispatcherStatus> = {}): void {
@@ -286,7 +271,7 @@ export class ProcessManager {
     }
   }
 
-  async openPreviewMonitor(input: OpenIrisMonitorInput = {}): Promise<void> {
+  async openPreviewMonitor(input: OpenIrisMonitorInput = {}): Promise<{ videoStreams: VideoStreamDescriptor[] }> {
     if (!this.hasExecutable()) {
       this.emitStatus({
         state: 'failed',
@@ -294,15 +279,23 @@ export class ProcessManager {
         previewMonitorAttached: false,
         previewOpen: false,
       })
-      return
+      return { videoStreams: [] }
     }
 
     const sessionId = `preview-${Date.now()}`
+    const cameraIndices = Array.from({ length: input.cameraCount ?? 0 }, (_, index) => index)
+    const videoStreams = await this.videoRelay.start(cameraIndices)
+    const videoPipes = cameraIndices.map((cameraIndex) => ({
+      cameraIndex,
+      pipePath: this.videoPipeName(cameraIndex),
+    }))
+
     const monitorOptions = {
       ...input,
       sharedMemoryName: input.sharedMemoryName ?? 'iris_shm_ipc',
       outputDirectory: input.outputDirectory ?? process.cwd(),
       posePipePath: input.posePipePath ?? this.pipeName,
+      videoPipes,
       verbose: input.verbose ?? false,
     }
 
@@ -319,6 +312,8 @@ export class ProcessManager {
       previewOpen: true,
       failed: false,
     })
+
+    return { videoStreams }
   }
 
   async closePreviewMonitor(): Promise<void> {
@@ -331,6 +326,8 @@ export class ProcessManager {
         }
       }
     }
+
+    await this.videoRelay.stop()
 
     this.emitStatus({
       state: this.status.runId ? 'running' : 'idle',
@@ -350,6 +347,7 @@ export class ProcessManager {
 
     const sessions = [...this.workers.keys()]
     await Promise.all(sessions.map((sessionId) => this.stop(sessionId)))
+    await this.videoRelay.stop()
 
     this.emitStatus({
       state: 'idle',
@@ -359,10 +357,6 @@ export class ProcessManager {
       stopping: false,
       failed: false,
     })
-  }
-
-  async shutdown(): Promise<void> {
-    await this.stopAll()
   }
 
   async startStandard({ sessionId, options, onCliOutput }: ProcessStartOptions) {
@@ -435,24 +429,47 @@ export class ProcessManager {
     }
 
     const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
+    const posePipePath: string = options.posePipePath ?? this.pipeName
+    const shmName: string = options.sharedMemoryName ?? 'iris_shm_ipc'
+    const videoPipes: Array<{ cameraIndex: number; pipePath: string }> = options.videoPipes ?? []
 
     let pipeServer: Awaited<ReturnType<typeof createPipeServer>> | null = null
+    const videoPipeServers: NetServer[] = []
+    const closeAllPipes = () => {
+      if (pipeServer) pipeServer.close()
+      for (const server of videoPipeServers) server.close()
+    }
+
     try {
-      console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${this.pipeName}`)
+      console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${posePipePath}`)
       pipeServer = await this.openPipeServer({
-        pipeName: this.pipeName,
+        pipeName: posePipePath,
         onFrame: (frame) => onFrame?.(frame),
       })
       console.log(`[iris:monitor:${sessionId}] step 2/4 done -- named pipe listening`)
 
-      const args = ['monitor', '--shm-name', 'iris_shm_ipc', '--pipe', PIPE_NAME]
+      if (videoPipes.length > 0) {
+        console.log(`[iris:monitor:${sessionId}] opening ${videoPipes.length} video pipe(s)`)
+        for (const vp of videoPipes) {
+          const videoPipeServer = await this.openVideoPipeReader({
+            pipeName: vp.pipePath,
+            onChunk: (frame) => this.videoRelay.push(frame.cameraId, frame.payload),
+          })
+          videoPipeServers.push(videoPipeServer)
+        }
+      }
+
+      const args = ['monitor', '--shm-name', shmName, '--pipe', posePipePath]
+      for (const vp of videoPipes) {
+        args.push('--video-pipe', `${vp.cameraIndex}:${vp.pipePath}`)
+      }
       console.log(`[iris:monitor:${sessionId}] step 3/4 -- spawning "iris_cli ${args.join(' ')}"`)
       const child = this.spawnProcess(cliPath, args, {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       console.log(`[iris:monitor:${sessionId}] step 3/4 done -- pid ${child.pid}; watching stdout for shared-memory attach`)
-      console.log(`[iris:monitor:${sessionId}] step 4/4 -- waiting to attach to shared memory "iris_shm_ipc" (requires a "run" process already producing frames)`)
+      console.log(`[iris:monitor:${sessionId}] step 4/4 -- waiting to attach to shared memory "${shmName}" (requires a "run" process already producing frames)`)
 
       child.stdout!.on('data', (chunk) => {
         const text = chunk.toString()
@@ -468,10 +485,8 @@ export class ProcessManager {
       this.streamSessionId = sessionId
 
       child.on('exit', async (code, signal) => {
-        console.log(`[iris:monitor:${sessionId}] monitor process exited (code=${code}, signal=${signal}); closing named pipe`)
-        if (pipeServer) {
-          pipeServer.close()
-        }
+        console.log(`[iris:monitor:${sessionId}] monitor process exited (code=${code}, signal=${signal}); closing named pipes`)
+        closeAllPipes()
         if (this.streamSessionId === sessionId) {
           this.streamSessionId = null
         }
@@ -486,12 +501,10 @@ export class ProcessManager {
       }
     } catch (error) {
       console.error(`[iris:monitor:${sessionId}] step 2-3/4 FAILED`, error)
-      if (pipeServer) {
-        try {
-          pipeServer.close()
-        } catch {
-          // ignore cleanup errors
-        }
+      try {
+        closeAllPipes()
+      } catch {
+        // ignore cleanup errors
       }
       return {
         ok: false,

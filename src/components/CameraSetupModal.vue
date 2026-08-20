@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { CameraConfig, CameraDevice, Resolution } from '../types';
 import { ROTATION_OPTIONS } from '../data/mock';
-import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig, startCameraLogger } from '../utils/camera-probe';
+import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig } from '../utils/camera-probe';
 import AppModal from './AppModal.vue';
 
 const props = defineProps<{
@@ -21,7 +21,6 @@ const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
 const loading = ref(false);
-const loggers = ref<Record<string, { stop: () => void }>>({});
 
 const selectableResolutions = computed<Resolution[]>(() => {
   const common = getCommonResolutionOptions(deviceProfiles.value);
@@ -89,13 +88,10 @@ async function loadCameras() {
         rotation: persisted?.rotation ?? base.rotation,
       } as CameraConfig;
     });
-    try {
-      console.log('[camera-setup] common config', common, 'final cameras', JSON.parse(JSON.stringify(cameras.value)));
-    } catch {}
   } catch (err) {
     // fallback to existing bridge if present
-    if ((window as any).starterKit && (window as any).starterKit.listCameras) {
-      const devices = await (window as any).starterKit.listCameras();
+    if ((window as any).irisStarter && (window as any).irisStarter.listCameras) {
+      const devices = await (window as any).irisStarter.listCameras();
       deviceProfiles.value = devices as CameraDevice[];
       cameras.value = devices.map((device: CameraDevice, index: number) => defaultConfig(device, index));
     } else {
@@ -107,14 +103,8 @@ async function loadCameras() {
   }
 }
 
-// After loading, auto-expand all and start previews; mark global best
+// After loading, auto-expand all and start previews
 async function postLoadSetup() {
-  // dump full camera details to console for inspect element
-  try {
-    console.log('[camera-setup] cameras', JSON.parse(JSON.stringify(cameras.value)));
-  } catch {}
-
-  // expand all and start previews
   const all = new Set<string>();
   cameras.value.forEach((c) => all.add(c.deviceId));
   expandedIds.value = all;
@@ -165,13 +155,6 @@ async function startPreview(deviceId: string) {
       video.play().catch(() => {
         // ignore autoplay restrictions
       });
-      // start logger for this preview
-      try {
-        const logger = startCameraLogger(video, deviceId);
-        loggers.value[deviceId] = logger;
-      } catch {
-        // ignore logger failures
-      }
     }
   } catch {
     // ignore preview failures; user can still configure camera settings
@@ -186,12 +169,6 @@ function stopPreview(deviceId: string) {
 
   stream.getTracks().forEach((track) => track.stop());
   delete activeStreams.value[deviceId];
-  // stop logger if present
-  const lg = loggers.value[deviceId];
-  if (lg && lg.stop) {
-    try { lg.stop(); } catch {}
-    delete loggers.value[deviceId];
-  }
 }
 
 function stopAllPreviews() {

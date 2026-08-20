@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
-import type { AppPhase, CameraConfig, PoseFrame } from './types';
+import type { AppPhase, CameraConfig, PoseFrame, VideoStreamDescriptor } from './types';
+import { BODY_JOINT_COUNT, countValidKeypoints, extractBodyKeypoints2D } from './utils/pose';
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
 import LiveView from './components/LiveView.vue';
@@ -13,39 +14,16 @@ const settingsOpen = ref(false);
 const mockFps = ref(30);
 const mockJoints = ref({ valid: 15, total: 17 });
 const livePose = ref<PoseFrame | null>(null);
+const videoStreams = ref<VideoStreamDescriptor[]>([]);
 let fpsTick: number | undefined;
 let removePoseListener: (() => void) | null = null;
 
 function getIrisApi(): any {
-  return (window as any).irisStarter ?? (window as any).starterKit ?? (window as any).irisDispatcher ?? null;
+  return (window as any).irisStarter ?? null;
 }
 
 function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number; total: number } {
-  const candidates: Array<Array<{ x?: number; y?: number; visible?: number; confidence?: number }>> = [];
-
-  if (!frame) return { valid: 0, total: 17 };
-
-  if (Array.isArray(frame.keypoints)) candidates.push(frame.keypoints as any);
-  if (Array.isArray(frame.joints)) candidates.push(frame.joints as any);
-  if (Array.isArray(frame.pose)) candidates.push(frame.pose as any);
-
-  if (Array.isArray(frame.people)) {
-    for (const person of frame.people) {
-      if (person && typeof person === 'object') {
-        if (Array.isArray(person.keypoints)) candidates.push(person.keypoints as any);
-        if (Array.isArray(person.joints)) candidates.push(person.joints as any);
-        if (Array.isArray(person.pose)) candidates.push(person.pose as any);
-      }
-    }
-  }
-
-  if (candidates.length === 0) {
-    return { valid: 0, total: 17 };
-  }
-
-  const points = candidates[0];
-  const valid = points.filter((point) => typeof point?.x === 'number' && typeof point?.y === 'number').length;
-  return { valid, total: Math.max(17, valid) };
+  return { valid: countValidKeypoints(extractBodyKeypoints2D(frame)), total: BODY_JOINT_COUNT };
 }
 
 onMounted(() => {
@@ -126,11 +104,11 @@ async function openIrisPreview() {
   try {
     const result = await api.openPreviewMonitor({
       sharedMemoryName: 'iris_shm_ipc',
-      outputDirectory: process.cwd(),
-      posePipePath: '\\\\.\\pipe\\iris_ipc',
+      cameraCount: cameras.value.length,
       verbose: false,
     });
     console.log('[starter-kit] openPreviewMonitor:', result);
+    videoStreams.value = Array.isArray(result?.videoStreams) ? result.videoStreams : [];
   } catch (error) {
     console.warn('[starter-kit] openPreviewMonitor failed:', error);
   }
@@ -144,8 +122,16 @@ function onCameraSetupContinue(config: CameraConfig[]) {
 
   try {
     const api = getIrisApi();
-    if (api?.saveSessionConfig) {
-      void api.saveSessionConfig({ cameras: config });
+    if (api?.saveRunConfig) {
+      void api.saveRunConfig({
+        cameras: config.map((cam) => ({
+          deviceId: cam.deviceId,
+          label: cam.label,
+          resolution: cam.resolution,
+          fps: cam.fps,
+          rotation: cam.rotation,
+        })),
+      });
     }
   } catch {
     // ignore missing or failing bridge; navigation should still continue
@@ -159,6 +145,7 @@ function onCameraSetupClose() {
 }
 
 function onCalibrationComplete() {
+  if (phase.value === 'live') return;
   calibrationOpen.value = false;
   phase.value = 'live';
   void openIrisPreview();
@@ -206,6 +193,7 @@ function reopenCalibration() {
         :joints-valid="mockJoints.valid"
         :joints-total="mockJoints.total"
         :pose="livePose"
+        :video-streams="videoStreams"
       />
       <div v-else class="placeholder">
         <p>{{ phase === 'camera-setup' ? 'Configure cameras to begin.' : 'Run calibration to continue.' }}</p>
