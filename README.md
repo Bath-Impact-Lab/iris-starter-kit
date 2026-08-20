@@ -30,7 +30,12 @@ This project is intentionally minimal and not a commercial product. It exists as
 - Node.js 20+
 - npm 10+
 - Windows
-- A real `iris_cli.exe` to see anything past camera setup — via `IRIS_HOME`, a bundled `resources/iris/bin/`, or a system install (see [IRIS_BUNDLING.md](IRIS_BUNDLING.md))
+- A real `iris_cli.exe` to see anything past camera setup. Easiest path:
+  install **IRIS Core** from the official installer at
+  <https://iris.cs.bath.ac.uk/> (Spec Builder isn't needed by this app),
+  then just `npm run dev` — no extra setup. See [IRIS_BUNDLING.md](IRIS_BUNDLING.md)
+  for env var overrides, bundling for distribution, or a gotcha around
+  personal `IRIS_HOME` overrides shadowing the installer.
 
 ## Run
 
