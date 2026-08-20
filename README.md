@@ -2,40 +2,27 @@
 
 Open-source, lightweight Electron starter for [IRIS](https://github.com/Bath-Impact-Lab/IRIS) markerless motion capture apps.
 
-This project is intentionally minimal and not a commercial product. It exists as a small, readable base for exploring the core IRIS flow: camera configuration, calibration, and live motion capture. The goal is to stay easy to understand, easy to run, and easy to extend without pulling in a full production architecture.
+This project is intentionally minimal and not a commercial product. It exists as a small, readable base for exploring the core IRIS flow — camera configuration, DA3 calibration, and live motion capture — against a real `iris_cli` process, not a mock. The goal is to stay easy to understand, easy to run, and easy to extend without pulling in a full production architecture.
 
-## Scope
+## Stack
 
-This starter intentionally keeps the app thin:
+- Electron + Vue 3 (Composition API) + Vite + TypeScript
+- Node.js `child_process` + Windows named pipes to drive and read from `iris_cli`
+- `ws` for a small local WebSocket relay (main process → renderer)
+- WebCodecs (`VideoDecoder`) in the renderer to decode IRIS's live H.264 video output onto `<canvas>` — no video/streaming framework
 
-- camera setup for resolution, FPS, and rotation
-- a calibration step for the DA3 startup flow
-- a live view showing camera feeds and pose output
-- very small IPC and process hooks to connect to IRIS
-- no heavy product features, no commercial polish, no broad platform abstraction
+## Flow
 
-## Minimal IRIS integration
-
-The app is structured to keep IRIS logic isolated and small. The expected integration points are:
-
-- [electron/ipc.ts](electron/ipc.ts) — Electron IPC handlers for camera listing, session start/stop, and stream events
-- [electron/preload.ts](electron/preload.ts) — safe bridge exposing a tiny `window.irisStarter` API
-- [electron/iris/config.ts](electron/iris/config.ts) — IRIS config generator for run/camera/calibration settings
-- [electron/iris/processManager.ts](electron/iris/processManager.ts) — spawns and manages the IRIS CLI process
-- [electron/iris/pipeServer.ts](electron/iris/pipeServer.ts) — reads pose frames from the named pipe
-- [electron/iris/utils.ts](electron/iris/utils.ts) — temp config file creation for IRIS runs
-- [src/types.ts](src/types.ts) — shared camera and pose models
-- [src/App.vue](src/App.vue) — flow between camera setup, calibration, and live capture
-- [src/components/LiveView.vue](src/components/LiveView.vue) — renders the live camera/mocap view
-
-This is intentionally a minimal subset of the IRIS work used in Recapture V3. The starter should not copy the full IRIS architecture or broad research platform layers unless a specific feature requires it.
+1. **Camera setup** — pick cameras, set resolution/FPS/rotation, see a live browser preview.
+2. **Calibration** — starts a real `iris_cli run` process and runs IRIS's DA3 startup calibration.
+3. **Live view** — once calibrated: live per-camera video feeds decoded straight from IRIS's own video pipes, plus a live 2D pose skeleton driven by IRIS's real pose output.
 
 ## What's included
 
-- Camera setup (resolution, FPS, rotation per camera)
-- DA3 calibration step (mock for now)
-- Live view — camera feeds and mocap side by side
-- IPC stubs ready for IRIS backend wiring
+- Camera setup (resolution, FPS, rotation per camera), persisted per device
+- Real DA3 calibration against a running `iris_cli` process
+- Live view — real decoded camera feeds and a real live mocap skeleton, side by side
+- A narrow, typed `window.irisStarter` IPC bridge connecting the two
 - Small, readable project layout suitable for experimentation
 
 ## Requirements
@@ -43,6 +30,7 @@ This is intentionally a minimal subset of the IRIS work used in Recapture V3. Th
 - Node.js 20+
 - npm 10+
 - Windows
+- A real `iris_cli.exe` to see anything past camera setup — via `IRIS_HOME`, a bundled `resources/iris/bin/`, or a system install (see [IRIS_BUNDLING.md](IRIS_BUNDLING.md))
 
 ## Run
 
@@ -59,3 +47,4 @@ npm run dev
 | `npm run build` | Production build |
 | `npm run preview` | Run production build |
 | `npm run typecheck` | TypeScript check |
+| `npm run test:iris` | Run the IRIS integration unit tests |
