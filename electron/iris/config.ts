@@ -217,7 +217,7 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
         appearance_threshold: 0.45,
         cross_camera_unconfirmed_threshold: 0.55,
         capture_volume: {
-          min_camera_coverage: Math.min(2, cameraCount),
+          min_camera_coverage: 1,
           ground_z: 0.0,
           cell_size: 0.1,
           erosion_margin: 0.0,
@@ -233,10 +233,10 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
           prune_uncertainty: 5.0,
         },
         spawn: {
-          require_multi_camera_spawn: true,
+          require_multi_camera_spawn: false,
           spawn_consensus_gate: 0.5,
           spawn_consensus_max_age_frames: 5,
-          min_supporting_cameras: Math.min(2, cameraCount),
+          min_supporting_cameras: 1,
         },
       },
       pose_estimation: {

@@ -11,11 +11,10 @@ const cameras = ref<CameraConfig[]>([]);
 const cameraSetupOpen = ref(true);
 const calibrationOpen = ref(true);
 const settingsOpen = ref(false);
-const mockFps = ref(30);
-const mockJoints = ref({ valid: 15, total: 17 });
+const liveFps = ref(0);
+const liveJoints = ref({ valid: 0, total: BODY_JOINT_COUNT });
 const livePose = ref<PoseFrame | null>(null);
 const videoStreams = ref<VideoStreamDescriptor[]>([]);
-let fpsTick: number | undefined;
 let removePoseListener: (() => void) | null = null;
 
 function getIrisApi(): any {
@@ -26,23 +25,26 @@ function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number;
   return { valid: countValidKeypoints(extractBodyKeypoints2D(frame)), total: BODY_JOINT_COUNT };
 }
 
+// Rolling count of pose frames received in the last second -- an honest
+// live FPS reading, not a fake ticker.
+const frameArrivalTimes: number[] = [];
+function recordFrameArrival(): number {
+  const now = performance.now();
+  frameArrivalTimes.push(now);
+  while (frameArrivalTimes.length > 0 && now - frameArrivalTimes[0]! > 1000) {
+    frameArrivalTimes.shift();
+  }
+  return frameArrivalTimes.length;
+}
+
 onMounted(() => {
   const api = getIrisApi();
-
-  fpsTick = window.setInterval(() => {
-    if (phase.value !== 'live') return;
-    mockFps.value = 28 + Math.floor(Math.random() * 4);
-    mockJoints.value = { valid: 14 + Math.floor(Math.random() * 3), total: 17 };
-  }, 1000);
 
   if (api?.onPoseData) {
     removePoseListener = api.onPoseData((frame: unknown) => {
       livePose.value = (frame as PoseFrame) ?? null;
-      const poseStats = extractPoseCount(livePose.value);
-      if (poseStats.valid > 0) {
-        mockJoints.value = poseStats;
-        mockFps.value = 30;
-      }
+      liveJoints.value = extractPoseCount(livePose.value);
+      liveFps.value = recordFrameArrival();
     });
   }
 
@@ -54,7 +56,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (fpsTick !== undefined) window.clearInterval(fpsTick);
   removePoseListener?.();
 
   try {
@@ -189,9 +190,9 @@ function reopenCalibration() {
       <LiveView
         v-if="phase === 'live'"
         :cameras="cameras"
-        :fps="mockFps"
-        :joints-valid="mockJoints.valid"
-        :joints-total="mockJoints.total"
+        :fps="liveFps"
+        :joints-valid="liveJoints.valid"
+        :joints-total="liveJoints.total"
         :pose="livePose"
         :video-streams="videoStreams"
       />
