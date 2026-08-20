@@ -73,6 +73,7 @@ export interface ProcessManagerOptions {
 export interface ProcessState {
   child: ChildProcess
   stopPromise?: Promise<{ ok: boolean; sessionId: string }>
+  isRun?: boolean
 }
 
 export type IrisDispatcherState = 'idle' | 'starting' | 'running' | 'previewing' | 'stopping' | 'failed'
@@ -271,7 +272,10 @@ export class ProcessManager {
     }
   }
 
-  async openPreviewMonitor(input: OpenIrisMonitorInput = {}): Promise<{ videoStreams: VideoStreamDescriptor[] }> {
+  async openPreviewMonitor(
+    input: OpenIrisMonitorInput = {},
+    onFrame?: (frame: unknown) => void,
+  ): Promise<{ videoStreams: VideoStreamDescriptor[] }> {
     if (!this.hasExecutable()) {
       this.emitStatus({
         state: 'failed',
@@ -303,7 +307,7 @@ export class ProcessManager {
       sessionId,
       options: monitorOptions,
       onCliOutput: (payload) => console.log(`[iris:${sessionId}] ${payload.channel}`, payload.line),
-      onFrame: (frame) => console.log('[iris:preview-frame]', frame),
+      onFrame: (frame) => onFrame?.(frame),
     })
 
     this.emitStatus({
@@ -397,7 +401,7 @@ export class ProcessManager {
       console.log(`[iris:run:${sessionId}] run process exited (code=${code}, signal=${signal})`)
     })
 
-    this.workers.set(sessionId, { child })
+    this.workers.set(sessionId, { child, isRun: true })
 
     return {
       ok: true,
@@ -531,7 +535,7 @@ export class ProcessManager {
       child.once('exit', () => {
         console.log(`[iris:${sessionId}] stopped`)
         this.workers.delete(sessionId)
-        if (!sessionId.startsWith('preview-')) {
+        if (entry.isRun) {
           void this.runStore?.update(sessionId, { state: 'stopped' })
         }
         resolve({ ok: true, sessionId })

@@ -43,8 +43,7 @@ export function resolveIrisExecutableResolution(
   const irisHome = location.irisHome?.trim()
     || process.env.IRIS_HOME?.trim()
     || getIrisHomeFromRegistry(platform)
-  
-  console.log('IRIS_HOME:', irisHome, process.env.IRIS_HOME, getIrisHomeFromRegistry(platform))
+
   if (irisHome) {
     const executable = executableFromHome(irisHome)
     if (pathExists(executable)) return { executablePath: executable, discovered: true }

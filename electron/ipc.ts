@@ -81,8 +81,8 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     };
   });
 
-  ipcMain.handle('iris:open-preview-monitor', async (_event, input = {}) => {
-    const { videoStreams } = await processManager.openPreviewMonitor(input);
+  ipcMain.handle('iris:open-preview-monitor', async (event, input = {}) => {
+    const { videoStreams } = await processManager.openPreviewMonitor(input, (frame) => sendPoseFrame(event, frame));
     return { ...processManager.getStatus(), videoStreams };
   });
 
