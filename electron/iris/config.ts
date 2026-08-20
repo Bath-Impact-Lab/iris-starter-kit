@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveIrisExecutable } from './resolveIrisExecutable.js';
 
 let cachedAppPath: string | null = null;
 
@@ -19,7 +20,16 @@ function getElectronAppPath(): string {
   }
 }
 
-export const PIPE_NAME = '\\\.\\pipe\\iris_ipc';
+function isElectronAppPackaged(): boolean {
+  try {
+    const { app } = require('electron');
+    return Boolean(app.isPackaged);
+  } catch {
+    return false;
+  }
+}
+
+export const PIPE_NAME = '\\\\.\\pipe\\iris_ipc';
 
 function getAppDataPath(): string {
   const envAppData = process.env.APPDATA || process.env.LOCALAPPDATA;
@@ -64,30 +74,13 @@ export function getIrisHome(): string {
 }
 
 export function getIrisCliPath(): string {
-  // Priority 1: explicit environment override
-  const cliOverride = process.env.IRIS_CLI_PATH || process.env.IRIS_CLI;
-  if (cliOverride) {
-    const resolved = path.resolve(cliOverride);
-    console.log('[iris-config] Using IRIS CLI from override:', resolved);
-    return resolved;
-  }
-
-  // Priority 2: bundled with app (resources/iris/bin/iris_cli.exe)
   const appPath = getElectronAppPath();
-  if (appPath) {
-    const bundledCliPath = path.join(appPath, 'resources', 'iris', 'bin', 'iris_cli.exe');
-    console.log('[iris-config] Checking bundled IRIS path:', bundledCliPath);
-    if (fs.existsSync(bundledCliPath)) {
-      console.log('[iris-config] Found bundled IRIS CLI');
-      return bundledCliPath;
-    }
-  }
-
-  // Priority 3: system install or IRIS_HOME env var
-  const irisHome = getIrisHome();
-  const cliPath = path.join(irisHome, 'bin', 'iris_cli.exe');
-  console.log('[iris-config] Falling back to system/IRIS_HOME path:', cliPath);
-  return cliPath;
+  return resolveIrisExecutable({
+    appPath,
+    resourcesPath: process.resourcesPath ?? path.join(appPath, 'resources'),
+    isPackaged: isElectronAppPackaged(),
+    override: process.env.IRIS_CLI_PATH || process.env.IRIS_CLI,
+  });
 }
 
 export function getIrisModelDir(): string {
@@ -112,7 +105,6 @@ export function getIrisCliMissingMessage(): string {
   return `IRIS CLI not found at ${cliPath}. ${envHints.join(' | ')}`;
 }
 
-export const IRIS_CLI_PATH = getIrisCliPath();
 export const IRIS_MODEL_DIR = getIrisModelDir();
 export const IRIS_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'triangulation_da3_startup');
 
@@ -127,35 +119,162 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   });
   const fps = Number.isFinite(options.video_fps) ? Number(options.video_fps) : (cameras[0]?.fps ?? 30);
   const rotate = Number.isFinite(options.rotation) ? Number(options.rotation) : (cameras[0]?.rotation ?? 0);
+  const cameraCount = Math.max(1, cameraIds.length);
+  const modelDir = IRIS_MODEL_DIR.replace(/\\/g, '/');
+  const outputDir = IRIS_CALIBRATION_DIR.replace(/\\/g, '/');
 
+  // IRIS's spec parser (core/include/iris/core/spec.hpp) requires a top-level
+  // "runtime" object; there is no standalone "calibration" pipeline stage.
+  // DA3 startup calibration runs inline as part of the triangulation stage of
+  // the full pipeline, and continues into live pose triangulation once it
+  // converges -- see IRIS/specs/pipeline.example.json.
   return {
-    execution: {
-      device_id: 0,
-      run_id: runId,
-    },
-    camera_groups: {
-      capture_rig: {
-        camera_ids: cameraIds,
-        width,
-        height,
-        rotate,
-        fps,
-        batching: true,
-        batch_camera_ids: cameraIds,
+    run_id: runId,
+    runtime: {
+      devices: {
+        gpu: 0,
+        cuda_streams: 2,
+        nvenc: false,
+      },
+      buffers: {
+        frame_capacity: 256,
+        pose_capacity: 256,
+        export_shm: true,
+        camera_count: cameraCount,
+        camera_slots: 256,
+        camera_width: width,
+        camera_height: height,
       },
     },
-    defaults: {
-      output: {
-        shm_name: 'iris_shm_ipc',
-        capacity: 120,
+    shared: {
+      execution: {
+        device_id: 0,
+      },
+      camera_groups: {
+        capture_rig: {
+          camera_ids: cameraIds,
+          width,
+          height,
+          rotate,
+          fps,
+          batching: true,
+          batch_camera_ids: cameraIds,
+        },
+      },
+      models: {
+        detection: {
+          yolox_people: {
+            type: 'yolox',
+            yolox_engine_path: `${modelDir}/yolox_s_bs16.trt`,
+            yolox_input_width: 640,
+            yolox_input_height: 640,
+            yolox_conf_threshold: 0.7,
+            yolox_iou_threshold: 0.45,
+          },
+        },
+        reid: {
+          osnet_x05: {
+            enabled: true,
+            engine_path: `${modelDir}/osnet_x05_fp16.trt`,
+            min_detection_confidence: 0.55,
+          },
+        },
+        pose: {
+          rtmpose_people: {
+            engine: `${modelDir}/rtmpose_bs16_fp16.trt`,
+            batch: 16,
+            input_w: 192,
+            input_h: 256,
+            split_ratio: 2.0,
+          },
+        },
+      },
+      defaults: {
+        detection: {
+          batch_size: 16,
+          detection_skip_enabled: true,
+          detection_skip_frames: 20,
+        },
+        output: {
+          shm_name: 'iris_shm_ipc',
+          capacity: 120,
+        },
       },
     },
     pipeline: {
-      calibration: {
-        type: 'da3_startup',
+      capture: {
+        id: 'capture',
         camera_group: 'capture_rig',
-        mode: 'startup',
-        output_dir: IRIS_CALIBRATION_DIR.replace(/\\/g, '/'),
+        id_prefix: 'cap',
+      },
+      detection: {
+        id: 'det0',
+        model: 'yolox_people',
+        reid_model: 'osnet_x05',
+      },
+      global_reid_tracking: {
+        id: 'global_track',
+        single_person_mode: true,
+        max_age: 200,
+        min_hits: 1,
+        min_detection_confidence: 0.5,
+        appearance_threshold: 0.45,
+        cross_camera_unconfirmed_threshold: 0.55,
+        capture_volume: {
+          min_camera_coverage: Math.min(2, cameraCount),
+          ground_z: 0.0,
+          cell_size: 0.1,
+          erosion_margin: 0.0,
+          max_search_extent: 0.5,
+          max_frames_outside: 30,
+        },
+        kalman: {
+          q_accel: 3.0,
+          r_meas: 0.1,
+          initial_velocity_uncertainty: 2.0,
+          base_gate: 0.75,
+          uncertainty_gate_k: 3.0,
+          prune_uncertainty: 5.0,
+        },
+        spawn: {
+          require_multi_camera_spawn: true,
+          spawn_consensus_gate: 0.5,
+          spawn_consensus_max_age_frames: 5,
+          min_supporting_cameras: Math.min(2, cameraCount),
+        },
+      },
+      pose_estimation: {
+        id: 'pose0',
+        model: 'rtmpose_people',
+      },
+      triangulation: {
+        id: 'tri0',
+        pose_source: 'pose0',
+        camera_group: 'capture_rig',
+        da3_startup_calibration: {
+          engine: `${modelDir}/da3_base.trt`,
+          output_dir: outputDir,
+          frame_source: 'frame_batch',
+          model_type: 'base',
+          viewer_align: true,
+          save_ply: 'scene.ply',
+        },
+        compute_reprojection: true,
+        store_reprojection_error: true,
+        gate_by_reprojection_error: true,
+        max_reprojection_error_px: 50.0,
+        smoothing: {
+          enabled: true,
+          freq: 100.0,
+          min_cutoff: 1.0,
+          beta: 0.5,
+          d_cutoff: 1.0,
+          cleanup_interval: 300,
+        },
+      },
+      output: {
+        id: 'output',
+        camera_group: 'capture_rig',
       },
     },
   };

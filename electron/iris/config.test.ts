@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildConfigFromOptions } from './config.js';
+import { buildConfigFromOptions, PIPE_NAME } from './config.js';
 import { ProcessManager } from './processManager.js';
 
-test('buildConfigFromOptions includes the DA3 startup pipeline and pipe config', () => {
+test('PIPE_NAME uses the double-backslash Windows named pipe device format', () => {
+  assert.equal(PIPE_NAME, '\\\\.\\pipe\\iris_ipc');
+});
+
+test('buildConfigFromOptions matches the IRIS spec top-level shape (run_id/runtime/shared/pipeline)', () => {
   const config = buildConfigFromOptions({
     run_id: 'test-run',
     camera_width: 1920,
@@ -16,10 +20,18 @@ test('buildConfigFromOptions includes the DA3 startup pipeline and pipe config',
     ],
   });
 
-  assert.equal(config.defaults.output.shm_name, 'iris_shm_ipc');
-  assert.equal(config.camera_groups.capture_rig.camera_ids.length, 2);
-  assert.equal(config.camera_groups.capture_rig.fps, 30);
-  assert.equal(config.pipeline?.calibration?.type, 'da3_startup');
+  assert.equal(config.run_id, 'test-run');
+  assert.ok(config.runtime, 'spec requires a top-level "runtime" object');
+  assert.equal(config.runtime.buffers.camera_width, 1920);
+  assert.ok(config.shared, 'spec requires a top-level "shared" object');
+  assert.equal(config.shared.defaults.output.shm_name, 'iris_shm_ipc');
+  assert.equal(config.shared.camera_groups.capture_rig.camera_ids.length, 2);
+  assert.equal(config.shared.camera_groups.capture_rig.fps, 30);
+  assert.equal(
+    config.pipeline.triangulation.da3_startup_calibration.model_type,
+    'base',
+  );
+  assert.ok(!('calibration' in config.pipeline), 'IRIS has no standalone "calibration" pipeline stage');
 });
 
 test('ProcessManager exposes a minimal dispatcher lifecycle status', () => {

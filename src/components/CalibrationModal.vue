@@ -36,11 +36,15 @@ function updateFromCli(payload: { channel: string; line: string }) {
 }
 
 function getIrisApi(): any {
-  return (window as any).irisStarter ?? (window as any).starterKit ?? (window as any).irisDispatcher ?? null;
+  console.log('=================================Getting IRIS API...');
+  console.log('=================================Window object:', window?.irisStarter);
+  return (window as any).irisStarter ?? null;
 }
 
 function attachListeners() {
   const api = getIrisApi();
+
+  console.log('=================================Attaching IRIS listeners...', api);
   if (!api?.onPoseData || !api?.onCliOutput) return;
 
   cleanupPoseListener = api.onPoseData((frame: unknown) => {
@@ -79,15 +83,27 @@ async function startCalibration() {
     return;
   }
 
+  console.log('=================================Starting IRIS calibration...');
   status.value = 'running';
   progress.value = 0;
   error.value = null;
   attachListeners();
 
   try {
+
+    console.log('=================================Starting IRIS pose stream...');
+     
+
+
     const result = await api.startPoseStream({
       mode: 'da3_startup',
-      cameras: props.cameras,
+      cameras: props.cameras.map((cam) => ({
+        id: cam.deviceId,
+        label: cam.label,
+        resolution: cam.resolution,
+        fps: cam.fps,
+        rotation: cam.rotation,
+      })),
       calibration: { type: 'da3_startup' },
       output: { shm_name: 'iris_shm_ipc' },
     });
@@ -116,7 +132,7 @@ async function stopCalibration() {
     return;
   }
 
-  if (!api?.stopSession) {
+  if (!api?.stopRun) {
     detachListeners();
     sessionId.value = undefined;
     status.value = 'idle';
@@ -125,7 +141,7 @@ async function stopCalibration() {
   }
 
   try {
-    await api.stopSession(sessionId.value);
+    await api.stopRun(sessionId.value);
   } catch {
     // ignore shutdown errors; UI can recover gracefully
   } finally {
