@@ -40,7 +40,7 @@ from **<https://iris.cs.bath.ac.uk/>**:
 2. When prompted for components, install **IRIS Core** (this is the
    `iris_cli.exe` + models this app needs). You do **not** need **IRIS
    Spec Builder** — this starter kit builds its own pipeline spec directly
-   in code (see `dont commit/IRIS-INTEGRATION-NOTES.md`), it doesn't use
+   in code, it doesn't use
    any spec-authoring tool.
 3. The installer downloads the ONNX models and builds five TensorRT
    engines locally (GPU-specific — this is why they're built on your
