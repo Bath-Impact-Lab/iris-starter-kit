@@ -1,4 +1,4 @@
-# IRIS Starter Kit — PRD
+# IRIS Starter Kit PRD
 
 ## Summary
 
@@ -13,7 +13,7 @@ not a commercial product.
 IRIS (Bath Impact Lab's markerless mocap engine) has no small, readable
 example of how to drive it from a desktop app. Teams evaluating or building
 on IRIS need a minimal, working reference for the CLI process lifecycle,
-named-pipe protocols, and UI flow — without wading through a full production
+named-pipe protocols, and UI flow, without wading through a full production
 codebase (e.g. Recapture V3).
 
 ## Goals
@@ -28,7 +28,7 @@ codebase (e.g. Recapture V3).
 
 - Not a commercial product (no participant/session management, no branding).
 - No avatar retargeting, FBX export, or full iris-studio feature set.
-- No broad platform abstraction — Windows only, one bundled/resolved
+- No broad platform abstraction. Windows only, one bundled/resolved
   `iris_cli.exe`.
 - No cloud sync, accounts, or multi-user features.
 
@@ -39,20 +39,20 @@ than documentation alone.
 
 ## Core features (current state)
 
-1. **Camera setup** — enumerate video input devices, live browser preview,
+1. **Camera setup**: enumerate video input devices, live browser preview,
    configure resolution/FPS/rotation per camera, persisted to `localStorage`.
-2. **DA3 calibration** — starts a real `iris_cli run` process (opens cameras,
+2. **DA3 calibration**: starts a real `iris_cli run` process (opens cameras,
    warms up detection/pose/triangulation, runs DA3 startup calibration
    inline) and a `monitor` process to detect when a person is tracked.
 3. **Live view**
    - **Camera feeds**: each pane decodes IRIS's own per-camera video-pipe
      output (H.264 Annex-B over a named pipe → local WebSocket relay →
-     WebCodecs `VideoDecoder` → canvas) — not a second `getUserMedia` capture,
+     WebCodecs `VideoDecoder` → canvas), not a second `getUserMedia` capture,
      which is impossible once IRIS holds the camera natively.
    - **Live mocap**: a 2D skeleton overlay driven by real per-camera 2D
      keypoints (`points_2d`) from IRIS's pose pipe, falling back to a static
      placeholder pose when no person is currently tracked.
-4. **IPC bridge** — a narrow `window.irisStarter` API (contextBridge) is the
+4. **IPC bridge**: a narrow `window.irisStarter` API (contextBridge) is the
    only surface the renderer touches; the main process owns all IRIS process,
    pipe, and persistence concerns.
 
@@ -68,7 +68,7 @@ than documentation alone.
 - Windows only, Node.js 20+, npm 10+.
 - Needs a real `iris_cli.exe` (via `IRIS_HOME`, bundled `resources/iris/bin/`,
   or a system install) and compatible GPU/model files to do anything beyond
-  camera setup — see `IRIS_BUNDLING.md`.
+  camera setup, see `IRIS_BUNDLING.md`.
 - Electron security baseline: `contextIsolation: true`, `nodeIntegration:
   false`, `sandbox: true`, restrictive CSP.
 

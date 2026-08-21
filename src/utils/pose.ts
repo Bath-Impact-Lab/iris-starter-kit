@@ -8,8 +8,8 @@ export interface PoseKeypoint2D {
 }
 
 // `points_2d[jointIndex][cameraIndex] = [u, v]` raw pixel coords; COCO-17
-// body joints are indices 0..16. (0, 0) means "no detection" -- there's no
-// validity flag. See dont commit/IRIS-INTEGRATION-NOTES.md.
+// body joints are indices 0..16. (0, 0) means "no detection", there's no
+// validity flag.
 export function extractBodyKeypoints2D(frame: PoseFrame | null | undefined, cameraIndex = 0): Array<PoseKeypoint2D | null> {
   const person = frame?.people?.[0];
   const points = person?.points_2d;

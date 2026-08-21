@@ -4,7 +4,7 @@ export type DecoderStatus = 'connecting' | 'streaming' | 'failed';
 
 // Decodes IRIS's raw H.264 Annex-B video-pipe stream via WebCodecs, reading
 // the codec profile/level from the stream's own SPS NAL rather than
-// hardcoding it. See dont commit/IRIS-INTEGRATION-NOTES.md.
+// hardcoding it.
 export class H264AnnexBDecoder {
   private socket: WebSocket | null = null;
   private decoder: VideoDecoder | null = null;

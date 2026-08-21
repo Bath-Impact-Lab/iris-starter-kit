@@ -67,7 +67,7 @@ export async function ensurePermission(): Promise<void> {
     const s = await navigator.mediaDevices.getUserMedia({ video: true });
     s.getTracks().forEach((t) => t.stop());
   } catch (err) {
-    // ignore — caller should handle missing labels/permissions
+    // ignore, caller should handle missing labels/permissions
   }
 }
 
