@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import type { CameraConfig, PoseFrame, VideoStreamDescriptor } from '../types';
-import { countValidKeypoints, extractBodyKeypoints2D, type PoseKeypoint2D } from '../utils/pose';
 import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
+import PoseScene3D from './PoseScene3D.vue';
 
 const props = defineProps<{
   cameras: CameraConfig[];
@@ -100,43 +100,6 @@ onBeforeUnmount(() => {
   for (const cameraId of [...decoders.keys()]) detachDecoder(cameraId);
 });
 
-// Raw points_2d are camera-pixel coordinates; project them into the
-// skeleton's small viewBox, preserving aspect ratio so the figure doesn't
-// distort regardless of the source camera's resolution.
-const VIEW_WIDTH = 120;
-const VIEW_HEIGHT = 200;
-
-function parseResolution(resolution: string | undefined): { width: number; height: number } {
-  const [width, height] = (resolution ?? '').split('x').map((value) => parseInt(value, 10));
-  return {
-    width: Number.isFinite(width) && width > 0 ? width : 1920,
-    height: Number.isFinite(height) && height > 0 ? height : 1080,
-  };
-}
-
-const posePoints = computed<Array<PoseKeypoint2D | null>>(() => {
-  const raw = extractBodyKeypoints2D(props.pose, 0);
-  const { width, height } = parseResolution(props.cameras[0]?.resolution);
-  const scale = Math.min(VIEW_WIDTH / width, VIEW_HEIGHT / height);
-  const offsetX = (VIEW_WIDTH - width * scale) / 2;
-  const offsetY = (VIEW_HEIGHT - height * scale) / 2;
-
-  return raw.map((point) => (point ? { x: offsetX + point.x * scale, y: offsetY + point.y * scale } : null));
-});
-
-const validPoseCount = computed(() => countValidKeypoints(posePoints.value));
-
-const skeletonPairs = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [1, 5], [5, 6], [6, 7],
-  [1, 8], [8, 9], [9, 10],
-  [8, 11], [11, 12], [12, 13],
-  [11, 14], [14, 15], [15, 16],
-];
-
-function pointAt(index: number) {
-  return posePoints.value[index] ?? null;
-}
 </script>
 
 <template>
@@ -148,26 +111,7 @@ function pointAt(index: number) {
           <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} fps</span>
         </header>
         <div class="feed mocap-feed">
-          <svg v-if="validPoseCount > 0" viewBox="0 0 120 200" class="skeleton" aria-hidden="true">
-            <g>
-              <template v-for="([a, b], index) in skeletonPairs" :key="index">
-                <line v-if="pointAt(a) && pointAt(b)" :x1="pointAt(a)?.x" :y1="pointAt(a)?.y" :x2="pointAt(b)?.x" :y2="pointAt(b)?.y" stroke="#6b9fff" stroke-width="2" />
-              </template>
-              <template v-for="(point, index) in posePoints" :key="index">
-                <circle v-if="point" :cx="point.x" :cy="point.y" r="4" fill="#6b9fff" stroke="#dfe8ff" stroke-width="1" />
-              </template>
-            </g>
-          </svg>
-          <svg v-else viewBox="0 0 120 200" class="skeleton" aria-hidden="true">
-            <circle cx="60" cy="24" r="10" fill="none" stroke="#6b9fff" stroke-width="2" />
-            <line x1="60" y1="34" x2="60" y2="90" stroke="#6b9fff" stroke-width="2" />
-            <line x1="60" y1="50" x2="30" y2="75" stroke="#6b9fff" stroke-width="2" />
-            <line x1="60" y1="50" x2="90" y2="75" stroke="#6b9fff" stroke-width="2" />
-            <line x1="60" y1="90" x2="42" y2="140" stroke="#6b9fff" stroke-width="2" />
-            <line x1="60" y1="90" x2="78" y2="140" stroke="#6b9fff" stroke-width="2" />
-            <line x1="42" y1="140" x2="38" y2="185" stroke="#6b9fff" stroke-width="2" />
-            <line x1="78" y1="140" x2="82" y2="185" stroke="#6b9fff" stroke-width="2" />
-          </svg>
+          <PoseScene3D :pose="pose" />
         </div>
       </section>
 
@@ -338,11 +282,5 @@ function pointAt(index: number) {
 
 .mocap-feed {
   background: radial-gradient(ellipse at center, #151a24 0%, #0a0c10 70%);
-}
-
-.skeleton {
-  width: 120px;
-  height: 200px;
-  opacity: 0.9;
 }
 </style>
