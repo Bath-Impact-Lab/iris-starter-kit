@@ -127,7 +127,7 @@ export async function probeCamera(deviceId: string): Promise<CameraDevice> {
 
     return {
       id: deviceId,
-      label: settings.label || `Camera ${deviceId}`,
+      label: track.label || `Camera ${deviceId}`,
       suggestedResolution,
       suggestedFps,
       defaultRotation,
