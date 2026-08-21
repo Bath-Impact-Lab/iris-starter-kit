@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerIpcHandlers } from './ipc.js';
@@ -21,6 +21,12 @@ function createWindow(): void {
     backgroundColor: '#0f1115',
     show: false,
     title: 'IRIS Starter Kit',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#141820',
+      symbolColor: '#9aa4b8',
+      height: 40,
+    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -45,6 +51,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
+
   const processManager = new ProcessManager({ runStore: new IrisRunStore(app.getPath('userData')) });
   registerIpcHandlers(processManager);
   createWindow();
