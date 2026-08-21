@@ -24,15 +24,16 @@ export interface RunConfig {
   cameras: CameraConfig[];
 }
 
-// Matches the JSON written by IRIS's pose pipe
-// (core/knect/utils/pose_stream_writer.cpp): per person, `points_2d` holds
-// one entry per shared-memory joint slot, each an array of [u, v] raw pixel
-// pairs -- one pair per camera. COCO-17 body joints are indices 0..16.
+// One tracked person's pose for a single frame.
 export interface PosePerson {
   person_id?: number;
+  // Per-joint 2D pixel coordinates, one pair per camera.
   points_2d?: Array<Array<[number, number]>>;
-  joint_centers?: unknown;
-  joint_angles?: unknown;
+  // Per-joint 3D position in metres. Zeroed where the joint wasn't detected.
+  joint_centers?: Array<[number, number, number]>;
+  // Per-joint rotation as a [w, x, y, z] quaternion. Only a subset of
+  // joints get a real value; the rest default to the identity rotation.
+  joint_angles?: Array<[number, number, number, number]>;
 }
 
 export interface PoseFrame {

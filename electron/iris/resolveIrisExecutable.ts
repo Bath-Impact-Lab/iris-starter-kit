@@ -37,9 +37,8 @@ export function resolveIrisExecutableResolution(
     : 'iris_cli'
   const executableFromHome = (home: string) => path.join(home, 'bin', executableName)
 
-  // IRIS is installed separately from Recapture. Its installer records the
-  // installation root in IRIS_HOME, so prefer that manifest location over the
-  // (normally absent) legacy bundled-resource path.
+  // The official installer records IRIS's install location in IRIS_HOME, so
+  // prefer that over the (normally absent) bundled-resource path.
   const irisHome = location.irisHome?.trim()
     || process.env.IRIS_HOME?.trim()
     || getIrisHomeFromRegistry(platform)
