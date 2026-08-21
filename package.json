@@ -21,6 +21,7 @@
     "package": "npm run build && electron-builder --win"
   },
   "dependencies": {
+    "three": "^0.185.1",
     "vue": "^3.5.13",
     "ws": "^8.21.3"
   },
@@ -55,7 +56,10 @@
       }
     ],
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "oneClick": false,
