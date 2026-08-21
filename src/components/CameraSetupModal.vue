@@ -502,6 +502,28 @@ function onDisplayNameChange(cam: CameraConfig) {
   font-size: 13px;
 }
 
+.field input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #e8eaed;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+
+.field input:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.field input:focus {
+  outline: none;
+  border-color: rgba(59, 111, 217, 0.55);
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .btn {
   border-radius: 8px;
   border: 1px solid #2a3140;
