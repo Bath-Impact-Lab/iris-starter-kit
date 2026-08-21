@@ -113,9 +113,10 @@ export const IRIS_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'tr
 
 // Static IRIS tuning knowledge (model params, tracking/smoothing constants,
 // pipeline stage wiring) lives in pipeline-template.json, mirroring IRIS's
-// own reference spec shape -- see dont commit/IRIS-INTEGRATION-NOTES.md.
-// Only the values that genuinely vary per run or per machine (camera
-// selection, resolved model/output paths, run id) are computed here.
+// own reference spec shape. Only the values that genuinely vary per run or
+// per machine (camera selection, resolved model/output paths, run id) are
+// computed here. See IRIS_BUNDLING.md's "Writing your own pipeline spec"
+// section if you want to hand-author or replace this template.
 function loadPipelineTemplate(): Record<string, any> {
   return JSON.parse(fs.readFileSync(PIPELINE_TEMPLATE_PATH, 'utf8'));
 }

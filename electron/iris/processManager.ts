@@ -9,8 +9,8 @@ import { IrisRunStore } from './runStore.js'
 import { writeTempConfigFile } from './utils.js'
 
 // `run` and `monitor` are independent IRIS processes, not a sequential
-// start -> calibrate -> mocap chain; see dont commit/IRIS-INTEGRATION-NOTES.md.
-// Marker strings below are copied verbatim from the IRIS C++ source.
+// start -> calibrate -> mocap chain. Marker strings below are copied
+// verbatim from the IRIS C++ source.
 const IRIS_MILESTONES: Array<{ marker: string; describe: (line: string) => string }> = [
   {
     marker: 'Pipeline warmup complete',

@@ -14,7 +14,7 @@ const props = defineProps<{
 }>();
 
 // Camera panes decode IRIS's own video-pipe output rather than a browser
-// `getUserMedia` grab -- see dont commit/IRIS-INTEGRATION-NOTES.md.
+// `getUserMedia` grab, since IRIS holds the camera natively once it's running.
 const canvasElements = new Map<number, HTMLCanvasElement>();
 const decoders = new Map<number, H264AnnexBDecoder>();
 const decoderUrls = new Map<number, string>();
