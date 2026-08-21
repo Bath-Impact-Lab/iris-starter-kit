@@ -24,25 +24,15 @@ export interface RunConfig {
   cameras: CameraConfig[];
 }
 
-// Matches the JSON written by IRIS's pose pipe
-// (core/knect/utils/pose_stream_writer.cpp): per person, `points_2d` holds
-// one entry per shared-memory joint slot, each an array of [u, v] raw pixel
-// pairs -- one pair per camera. COCO-17 body joints are indices 0..16.
-//
-// `joint_centers` and `joint_angles` share that same 133-slot indexing (see
-// HALPE26_JOINT_NAMES in utils/pose.ts for what indices 0..25 mean), coming
-// from IRIS's unconstrained kinematic solver
-// (core/stages/kinematics/kinematic_solver.cpp):
-// - `joint_centers[j]` is `[x, y, z]` in metres, zeroed where undetected.
-// - `joint_angles[j]` is a `[w, x, y, z]` quaternion, but sparse: only 8
-//   joints (both hips, knees, shoulders, elbows) get a real bone-direction
-//   quaternion; every other slot is the untouched identity `[1, 0, 0, 0]`,
-//   not a "no data" sentinel. See utils/pose.ts's extractJointRotations3D
-//   for the joints that are actually meaningful.
+// One tracked person's pose for a single frame.
 export interface PosePerson {
   person_id?: number;
+  // Per-joint 2D pixel coordinates, one pair per camera.
   points_2d?: Array<Array<[number, number]>>;
+  // Per-joint 3D position in metres. Zeroed where the joint wasn't detected.
   joint_centers?: Array<[number, number, number]>;
+  // Per-joint rotation as a [w, x, y, z] quaternion. Only a subset of
+  // joints get a real value; the rest default to the identity rotation.
   joint_angles?: Array<[number, number, number, number]>;
 }
 

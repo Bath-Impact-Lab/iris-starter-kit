@@ -10,8 +10,8 @@ export interface VideoStreamDescriptor {
   url: string;
 }
 
-// Relays raw H.264 Annex-B chunks (already stripped of the IpcFrameHeader
-// by videoPipeReader) to per-camera WebSocket clients in the renderer.
+// Relays raw H.264 Annex-B chunks to per-camera WebSocket clients in the
+// renderer.
 export class VideoRelayServer {
   private server: WebSocketServer | null = null;
   private readonly clients = new Map<number, Set<WebSocket>>();

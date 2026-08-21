@@ -2,10 +2,8 @@ import type { PoseFrame } from '../types';
 
 export const BODY_JOINT_COUNT = 17;
 
-// Halpe26 skeleton indexing that `joint_centers`/`joint_angles` use for
-// their first 26 entries (core/stages/kinematics/kinematic_solver.cpp's
-// anonymous `Halpe26` enum). Indices 26+ continue into the same array's
-// COCO-WholeBody face/hand landmarks that `points_2d` also carries.
+// Joint names for indices 0..25 of points_2d/joint_centers/joint_angles.
+// Indices 26+ are face and hand landmarks and aren't named here.
 export const HALPE26_JOINT_NAMES = [
   'nose', 'l_eye', 'r_eye', 'l_ear', 'r_ear',
   'l_shoulder', 'r_shoulder', 'l_elbow', 'r_elbow', 'l_wrist', 'r_wrist',
@@ -14,9 +12,8 @@ export const HALPE26_JOINT_NAMES = [
   'l_big_toe', 'r_big_toe', 'l_small_toe', 'r_small_toe', 'l_heel', 'r_heel',
 ] as const;
 
-// Of the 26 Halpe26 joints, only these get a real bone-direction quaternion
-// out of IRIS's unconstrained kinematic solver; every other `joint_angles`
-// slot is left at the identity quaternion.
+// Joints that come back with a real rotation in joint_angles; every other
+// joint defaults to the identity rotation.
 const JOINTS_WITH_REAL_ROTATION = new Set<string>([
   'l_hip', 'r_hip', 'l_knee', 'r_knee', 'l_shoulder', 'r_shoulder', 'l_elbow', 'r_elbow',
 ]);
@@ -30,17 +27,14 @@ export interface JointCenter3D {
 
 export interface JointRotation3D {
   name: (typeof HALPE26_JOINT_NAMES)[number];
-  // Reordered from the pipe's [w, x, y, z] to [x, y, z, w] to match Unity's
-  // `Quaternion` constructor directly.
+  // [x, y, z, w], matching Unity's Quaternion constructor.
   x: number;
   y: number;
   z: number;
   w: number;
 }
 
-// 3D joint positions in metres, one entry per Halpe26 joint. Positions with
-// no detection come back as (0, 0, 0) -- same "no validity flag" caveat as
-// extractBodyKeypoints2D below.
+// 3D joint positions in metres. Undetected joints come back as (0, 0, 0).
 export function extractJointCenters3D(frame: PoseFrame | null | undefined): JointCenter3D[] {
   const person = frame?.people?.[0];
   const centers = person?.joint_centers;
@@ -52,9 +46,9 @@ export function extractJointCenters3D(frame: PoseFrame | null | undefined): Join
   });
 }
 
-// Bone-direction quaternions for the joints IRIS actually computes one for
-// (see JOINTS_WITH_REAL_ROTATION) -- the rest of `joint_angles` is identity
-// and deliberately left out here rather than returned as fake rotation data.
+// Rotations for the joints that have a real one (see
+// JOINTS_WITH_REAL_ROTATION); the rest default to the identity rotation and
+// are left out rather than returned as fake data.
 export function extractJointRotations3D(frame: PoseFrame | null | undefined): JointRotation3D[] {
   const person = frame?.people?.[0];
   const angles = person?.joint_angles;

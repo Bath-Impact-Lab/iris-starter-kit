@@ -8,9 +8,8 @@ import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer
 import { IrisRunStore } from './runStore.js'
 import { writeTempConfigFile } from './utils.js'
 
-// `run` and `monitor` are independent IRIS processes, not a sequential
-// start -> calibrate -> mocap chain. Marker strings below are copied
-// verbatim from the IRIS C++ source.
+// `run` and `monitor` are separate IRIS processes, not one sequential
+// chain. Marker strings below must match IRIS's log output exactly.
 const IRIS_MILESTONES: Array<{ marker: string; describe: (line: string) => string }> = [
   {
     marker: 'Pipeline warmup complete',

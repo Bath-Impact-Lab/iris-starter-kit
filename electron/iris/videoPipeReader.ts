@@ -1,8 +1,8 @@
 import net from 'node:net';
 
-// Mirrors `iris::core::IpcFrameHeader`: a packed 40-byte, little-endian
-// header before every payload chunk on a `--video-pipe` named pipe.
-// Payload is raw H.264 Annex-B, not MPEG-TS despite the CLI help text.
+// Packed 40-byte, little-endian header before every payload chunk on the
+// video pipe. Payload is raw H.264 Annex-B, not MPEG-TS despite the CLI
+// help text.
 export const IPC_FRAME_HEADER_SIZE = 40;
 export const IPC_FRAME_MAGIC = 0x49524953; // "IRIS"
 
