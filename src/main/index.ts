@@ -8,7 +8,7 @@ import { IrisRunStore } from './iris/runStore.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const isDev = process.env.NODE_ENV === 'development';
-const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const devServerUrl = process.env.ELECTRON_RENDERER_URL;
 
 let mainWindow: BrowserWindow | null = null;
 
