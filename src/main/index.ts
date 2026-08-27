@@ -28,7 +28,7 @@ function createWindow(): void {
       height: 40,
     },
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -42,7 +42,7 @@ function createWindow(): void {
   if (isDev && devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
   mainWindow.on('closed', () => {

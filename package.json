@@ -8,15 +8,13 @@
     "type": "git",
     "url": "https://github.com/Bath-Impact-Lab/iris-starter-kit.git"
   },
-  "main": "dist-electron/main.js",
+  "main": "out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "npm run build:electron && npm run build:preload && concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env NODE_ENV=development VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
-    "build": "npm run build:electron && npm run build:preload && vue-tsc --noEmit && vite build",
-    "build:electron": "tsc -p electron/tsconfig.json && node electron/copy-static-assets.mjs",
-    "build:preload": "tsc -p electron/tsconfig.preload.json",
-    "test:iris": "npm run build:electron && vitest run electron/iris/resolveIrisExecutable.test.ts electron/iris/pipeServer.test.ts electron/iris/videoPipeReader.test.ts && node --test dist-electron/iris/config.test.js",
-    "preview": "npm run build && cross-env NODE_ENV=production electron .",
+    "dev": "electron-vite dev",
+    "build": "vue-tsc --noEmit && electron-vite build",
+    "test:iris": "vitest run src/main/iris",
+    "preview": "electron-vite preview",
     "typecheck": "vue-tsc --noEmit",
     "package": "npm run build && electron-builder --win"
   },
@@ -28,15 +26,13 @@
   "devDependencies": {
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^5.2.1",
-    "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3",
     "electron": "^34.0.2",
     "electron-builder": "^26.15.3",
+    "electron-vite": "^3.1.0",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
     "vitest": "^4.1.11",
-    "vue-tsc": "^2.2.0",
-    "wait-on": "^8.0.2"
+    "vue-tsc": "^2.2.0"
   },
   "build": {
     "appId": "uk.ac.bath.impactlab.iris-starter-kit",
@@ -45,8 +41,7 @@
       "output": "release"
     },
     "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
+      "out/**/*",
       "package.json"
     ],
     "extraResources": [
