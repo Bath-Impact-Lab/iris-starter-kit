@@ -8,7 +8,7 @@ import { IrisRunStore } from './iris/runStore.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const isDev = process.env.NODE_ENV === 'development';
-const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const devServerUrl = process.env.ELECTRON_RENDERER_URL;
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -28,7 +28,7 @@ function createWindow(): void {
       height: 40,
     },
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -42,7 +42,7 @@ function createWindow(): void {
   if (isDev && devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
   mainWindow.on('closed', () => {
