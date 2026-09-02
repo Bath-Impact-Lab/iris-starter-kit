@@ -286,6 +286,7 @@ function onDisplayNameChange(cam: CameraConfig) {
             <video
               :ref="setVideoRef(cam.deviceId)"
               class="preview"
+              :style="{ transform: `rotate(${cam.rotation}deg)` }"
               autoplay
               muted
               playsinline
