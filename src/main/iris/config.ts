@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { resolveIrisExecutable } from './resolveIrisExecutable.js';
+
+const execFileAsync = promisify(execFile);
 
 const PIPELINE_TEMPLATE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pipeline-template.json');
 
@@ -84,6 +88,41 @@ export function getIrisCliPath(): string {
     isPackaged: isElectronAppPackaged(),
     override: process.env.IRIS_CLI_PATH || process.env.IRIS_CLI,
   });
+}
+
+export interface IrisCameraDevice {
+  index: number;
+  name: string;
+  devicePath?: string;
+}
+
+// IRIS's own view of what cameras it can actually open (`iris_cli
+// show-cameras --json`), as opposed to the browser/OS device lists the
+// renderer's camera setup picker uses. Those enumerate independently and
+// can disagree -- most commonly when a virtual camera (OBS Virtual Camera,
+// a capture-card driver's loopback device, etc.) shows up in the browser's
+// navigator.mediaDevices list but isn't something IRIS's capture backend
+// recognizes as an openable device. Returns null (rather than an empty
+// array) when IRIS's own list couldn't be determined at all, so callers
+// can tell "IRIS found zero cameras" apart from "we don't know" and avoid
+// clamping to zero on a transient failure.
+export async function listIrisCameras(cliPath: string): Promise<IrisCameraDevice[] | null> {
+  try {
+    const { stdout } = await execFileAsync(cliPath, ['show-cameras', '--json'], {
+      windowsHide: true,
+      timeout: 10000,
+    });
+    const parsed = JSON.parse(stdout);
+    const cameras = Array.isArray(parsed?.cameras) ? parsed.cameras : [];
+    return cameras.map((camera: any) => ({
+      index: Number(camera.index),
+      name: String(camera.name ?? ''),
+      devicePath: camera.device_path ? String(camera.device_path) : undefined,
+    }));
+  } catch (error) {
+    console.warn('[iris:config] "iris_cli show-cameras" failed -- skipping camera reconciliation:', error);
+    return null;
+  }
 }
 
 export function getIrisModelDir(): string {

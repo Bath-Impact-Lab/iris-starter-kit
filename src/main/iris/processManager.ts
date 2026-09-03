@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
-import { PIPE_NAME, buildConfigFromOptions, getIrisCliMissingMessage, getIrisCliPath } from './config.js'
+import { PIPE_NAME, buildConfigFromOptions, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
 import { createPipeServer } from './pipeServer.js'
 import { createVideoPipeReader } from './videoPipeReader.js'
 import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
@@ -62,6 +62,7 @@ export interface ProcessManagerDependencies {
   videoRelayServer?: VideoRelayServer
   writeTempConfigFile?: typeof writeTempConfigFile
   pipeName?: string
+  listCameras?: typeof listIrisCameras
 }
 
 export interface ProcessManagerOptions {
@@ -127,6 +128,7 @@ export class ProcessManager {
   private readonly videoRelay: VideoRelayServer
   private readonly createTempConfig: NonNullable<ProcessManagerDependencies['writeTempConfigFile']>
   private readonly pipeName: string
+  private readonly listCameras: NonNullable<ProcessManagerDependencies['listCameras']>
   private status: IrisDispatcherStatus = {
     state: 'idle',
     runId: null,
@@ -153,6 +155,39 @@ export class ProcessManager {
     this.videoRelay = dependencies.videoRelayServer ?? new VideoRelayServer()
     this.createTempConfig = dependencies.writeTempConfigFile ?? writeTempConfigFile
     this.pipeName = dependencies.pipeName ?? PIPE_NAME
+    this.listCameras = dependencies.listCameras ?? listIrisCameras
+  }
+
+  // IRIS's own camera list (`iris_cli show-cameras`) is the source of truth
+  // for what capture_rig.camera_ids can actually reference -- the renderer's
+  // camera setup picker enumerates independently (browser/OS device lists)
+  // and can disagree, most commonly when a virtual camera shows up there
+  // but isn't something IRIS's capture backend recognizes. If we can't
+  // determine IRIS's list at all, or the counts already agree, proceed with
+  // what was configured unchanged. Otherwise, rather than asking IRIS to
+  // open a camera_ids index it doesn't have (which fails pipeline startup),
+  // continue with however many cameras IRIS itself confirmed it can open.
+  private async reconcileCameras(
+    cameras: NonNullable<StartIrisRunInput['cameras']>,
+  ): Promise<NonNullable<StartIrisRunInput['cameras']>> {
+    if (cameras.length === 0) return cameras
+
+    let irisCameras: IrisCameraDevice[] | null
+    try {
+      irisCameras = await this.listCameras(this.getExecutablePath())
+    } catch (error) {
+      console.warn('[iris:cameras] failed to query IRIS\'s camera list -- continuing with the configured cameras as-is:', error)
+      return cameras
+    }
+
+    if (irisCameras === null || irisCameras.length === cameras.length) return cameras
+
+    const usable = Math.min(cameras.length, irisCameras.length)
+    console.warn(
+      `[iris:cameras] configured ${cameras.length} camera(s) but IRIS itself found ${irisCameras.length} -- ` +
+        `continuing with the first ${usable} camera(s) IRIS can actually open instead of failing startup.`,
+    )
+    return cameras.slice(0, usable)
   }
 
   private videoPipeName(cameraIndex: number): string {
@@ -215,6 +250,8 @@ export class ProcessManager {
       }
     }
 
+    const cameras = await this.reconcileCameras(input.cameras ?? [])
+
     this.emitStatus({
       state: 'starting',
       runId,
@@ -232,7 +269,7 @@ export class ProcessManager {
         camera_width: input.camera_width ?? 1920,
         camera_height: input.camera_height ?? 1080,
         video_fps: input.video_fps ?? 30,
-        cameras: input.cameras ?? [],
+        cameras,
         verbose: input.verbose ?? false,
         profileFile: input.profileFile,
       },
