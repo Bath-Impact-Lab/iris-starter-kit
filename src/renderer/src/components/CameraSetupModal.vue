@@ -15,7 +15,16 @@ const props = defineProps<{
   videoStreams?: VideoStreamDescriptor[];
   // The config IRIS is actually running right now (while editing).
   currentConfig?: CameraConfig[];
+  // What IRIS actually baked into the video already (camera 0's rotation at last run start).
+  bakedRotation?: number;
 }>();
+
+// IRIS already rotated the IRIS-stream preview by bakedRotation; only the leftover delta still
+// needs applying here. The getUserMedia() fallback below shows the true unrotated source instead,
+// so it always needs the full configured angle, not this delta.
+function displayRotation(rotation: number): number {
+  return ((rotation - (props.bakedRotation ?? 0)) % 360 + 360) % 360;
+}
 
 const emit = defineEmits<{
   continue: [cameras: CameraConfig[]];
@@ -409,13 +418,13 @@ function onDisplayNameChange(cam: CameraConfig) {
               v-if="hasIrisStream(cam.deviceId)"
               :ref="setCanvasRef(cam.deviceId)"
               class="preview"
-              :style="{ transform: `rotate(${cam.rotation}deg)` }"
+              :class="`rotate-${displayRotation(cam.rotation)}`"
             />
             <video
               v-else
               :ref="setVideoRef(cam.deviceId)"
               class="preview"
-              :style="{ transform: `rotate(${cam.rotation}deg)` }"
+              :class="`rotate-${cam.rotation}`"
               autoplay
               muted
               playsinline
@@ -578,6 +587,7 @@ function onDisplayNameChange(cam: CameraConfig) {
   display: flex;
   align-items: center;
   justify-content: center;
+  container-type: size;
 }
 
 .preview {
@@ -586,6 +596,18 @@ function onDisplayNameChange(cam: CameraConfig) {
   object-fit: cover;
   background: #0d1118;
 }
+
+/* A 90/270 rotation swaps visual width/height, so the pre-rotation box must too. */
+.preview.rotate-90,
+.preview.rotate-270 {
+  width: 100cqh;
+  height: 100cqw;
+}
+
+.rotate-0 { transform: rotate(0deg); }
+.rotate-90 { transform: rotate(90deg); }
+.rotate-180 { transform: rotate(180deg); }
+.rotate-270 { transform: rotate(270deg); }
 
 .preview-overlay {
   position: absolute;

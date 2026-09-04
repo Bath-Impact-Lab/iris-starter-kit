@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
-import type { AppPhase, CameraConfig, PoseFrame, VideoStreamDescriptor } from './types';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
+import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from './types';
 import { BODY_JOINT_COUNT, countValidKeypoints, extractBodyKeypoints2D } from './utils/pose';
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
@@ -13,10 +13,41 @@ const calibrationOpen = ref(false);
 // Bumped on each (re)start so CalibrationModal remounts instead of reusing a stale 'done' status.
 const calibrationSessionId = ref(0);
 const settingsOpen = ref(false);
+
+const DEFAULT_MOCAP_SETTINGS: MocapViewSettings = {
+  scale: 1.3,
+  boneThickness: 0.014,
+};
+
+function loadMocapSettings(): MocapViewSettings {
+  try {
+    const stored = JSON.parse(localStorage.getItem('mocap-view-settings') ?? 'null');
+    return stored ? { ...DEFAULT_MOCAP_SETTINGS, ...stored } : { ...DEFAULT_MOCAP_SETTINGS };
+  } catch {
+    return { ...DEFAULT_MOCAP_SETTINGS };
+  }
+}
+
+const mocapSettings = ref<MocapViewSettings>(loadMocapSettings());
+watch(
+  mocapSettings,
+  (settings) => {
+    try {
+      localStorage.setItem('mocap-view-settings', JSON.stringify(settings));
+    } catch {
+      // ignore storage failures
+    }
+  },
+  { deep: true },
+);
 const liveFps = ref(0);
 const liveJoints = ref({ valid: 0, total: BODY_JOINT_COUNT });
 const livePose = ref<PoseFrame | null>(null);
 const videoStreams = ref<VideoStreamDescriptor[]>([]);
+// IRIS bakes camera 0's rotation into the raw capture before anything else touches it, so the
+// video we receive already reflects whatever this was set to at the last real run start -- not
+// necessarily cameras.value[0].rotation right now, since a rotation-only edit skips a restart.
+const bakedRotation = ref(0);
 let removePoseListener: (() => void) | null = null;
 
 function getIrisApi(): any {
@@ -74,6 +105,8 @@ async function startIrisRun(config: CameraConfig[]) {
     console.warn('[starter-kit] IRIS backend is unavailable; skipping startRun');
     return;
   }
+
+  bakedRotation.value = config[0]?.rotation ?? 0;
 
   try {
     const payload = {
@@ -255,6 +288,8 @@ function reopenCalibration() {
         :joints-total="liveJoints.total"
         :pose="livePose"
         :video-streams="videoStreams"
+        :baked-rotation="bakedRotation"
+        v-model:mocap-settings="mocapSettings"
       />
       <div v-else class="placeholder">
         <p>{{ phase === 'camera-setup' ? 'Configure cameras to begin.' : 'Run calibration to continue.' }}</p>
@@ -282,6 +317,7 @@ function reopenCalibration() {
       :editing="phase !== 'camera-setup'"
       :video-streams="videoStreams"
       :current-config="cameras"
+      :baked-rotation="bakedRotation"
       @continue="onCameraSetupContinue"
       @close="onCameraSetupClose"
     />

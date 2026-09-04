@@ -2,11 +2,12 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { PoseFrame } from '../types';
+import type { MocapViewSettings, PoseFrame } from '../types';
 import { HALPE26_JOINT_NAMES, extractJointCenters3D, type JointCenter3D } from '../utils/pose';
 
 const props = defineProps<{
   pose?: PoseFrame | null;
+  settings: MocapViewSettings;
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -27,7 +28,17 @@ const BONE_PAIRS: Array<[(typeof HALPE26_JOINT_NAMES)[number], (typeof HALPE26_J
 ];
 
 const JOINT_RADIUS = 0.035;
-const BONE_RADIUS = 0.022;
+// Per-frame joint data can be noisy/intermittent (occlusion, low confidence). Smooth
+// positions toward each new reading instead of snapping, and give a joint a short grace
+// period of missed frames before hiding it, instead of vanishing on the very first miss.
+const SMOOTHING_ALPHA = 0.35;
+const MISS_FRAMES_BEFORE_HIDE = 5;
+
+interface JointState {
+  smoothed: THREE.Vector3;
+  missCount: number;
+  everValid: boolean;
+}
 
 let renderer: THREE.WebGLRenderer | null = null;
 let scene: THREE.Scene | null = null;
@@ -42,6 +53,7 @@ const boneMaterial = new THREE.MeshStandardMaterial({ color: 0x4a72c4, roughness
 
 const joints = new Map<string, THREE.Mesh>();
 const bones = new Map<string, THREE.Mesh>();
+const jointState = new Map<string, JointState>();
 
 function isValid(center: JointCenter3D | undefined): center is JointCenter3D {
   return Boolean(center) && (center!.x !== 0 || center!.y !== 0 || center!.z !== 0);
@@ -77,10 +89,11 @@ function buildScene(container: HTMLElement): void {
     const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
     mesh.visible = false;
     joints.set(name, mesh);
+    jointState.set(name, { smoothed: new THREE.Vector3(), missCount: 0, everValid: false });
     scene.add(mesh);
   }
   for (const [from, to] of BONE_PAIRS) {
-    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(BONE_RADIUS, 0.1, 4, 8), boneMaterial);
+    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(props.settings.boneThickness, 0.1, 4, 8), boneMaterial);
     mesh.visible = false;
     bones.set(`${from}-${to}`, mesh);
     scene.add(mesh);
@@ -107,9 +120,12 @@ function resizeScene(width: number, height: number): void {
   camera.updateProjectionMatrix();
 }
 
-function updateBone(from: JointCenter3D, to: JointCenter3D, mesh: THREE.Mesh): void {
-  const start = new THREE.Vector3(from.x, from.y, from.z);
-  const end = new THREE.Vector3(to.x, to.y, to.z);
+function scaledPosition(center: JointCenter3D): THREE.Vector3 {
+  const scale = props.settings.scale;
+  return new THREE.Vector3(center.x * scale, center.y * scale, center.z * scale);
+}
+
+function updateBone(start: THREE.Vector3, end: THREE.Vector3, mesh: THREE.Mesh): void {
   const length = start.distanceTo(end);
   if (length < 0.005) {
     mesh.visible = false;
@@ -117,7 +133,7 @@ function updateBone(from: JointCenter3D, to: JointCenter3D, mesh: THREE.Mesh): v
   }
 
   mesh.geometry.dispose();
-  mesh.geometry = new THREE.CapsuleGeometry(BONE_RADIUS, length, 4, 8);
+  mesh.geometry = new THREE.CapsuleGeometry(props.settings.boneThickness, length, 4, 8);
   mesh.visible = true;
   mesh.position.copy(start).add(end).multiplyScalar(0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.clone().sub(start).normalize());
@@ -128,22 +144,43 @@ function updateScene(): void {
   const byName = new Map(centers.map((center) => [center.name, center]));
 
   for (const [name, mesh] of joints) {
+    const state = jointState.get(name)!;
     const center = byName.get(name);
-    mesh.visible = isValid(center);
-    if (center && mesh.visible) mesh.position.set(center.x, center.y, center.z);
+
+    if (isValid(center)) {
+      const raw = scaledPosition(center);
+      if (state.everValid) state.smoothed.lerp(raw, SMOOTHING_ALPHA);
+      else state.smoothed.copy(raw);
+      state.everValid = true;
+      state.missCount = 0;
+      mesh.visible = true;
+      mesh.position.copy(state.smoothed);
+    } else if (state.everValid && state.missCount < MISS_FRAMES_BEFORE_HIDE) {
+      // Brief dropout -- hold the last known position instead of vanishing immediately.
+      state.missCount += 1;
+    } else {
+      mesh.visible = false;
+    }
   }
 
   for (const [from, to] of BONE_PAIRS) {
     const mesh = bones.get(`${from}-${to}`);
-    const a = byName.get(from);
-    const b = byName.get(to);
-    if (!mesh) continue;
-    if (isValid(a) && isValid(b)) updateBone(a, b, mesh);
-    else mesh.visible = false;
+    const fromMesh = joints.get(from);
+    const toMesh = joints.get(to);
+    if (!mesh || !fromMesh || !toMesh) continue;
+
+    if (fromMesh.visible && toMesh.visible) {
+      updateBone(jointState.get(from)!.smoothed, jointState.get(to)!.smoothed, mesh);
+    } else {
+      mesh.visible = false;
+    }
   }
 }
 
 watch(() => props.pose, updateScene);
+
+// scale/boneThickness are picked up on the next updateScene() call, which this triggers immediately.
+watch(() => props.settings, updateScene, { deep: true });
 
 onMounted(() => {
   if (containerRef.value) buildScene(containerRef.value);
@@ -154,6 +191,7 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   controls?.dispose();
   for (const mesh of bones.values()) mesh.geometry.dispose();
+  jointGeometry.dispose();
   renderer?.dispose();
   renderer?.domElement.remove();
 });

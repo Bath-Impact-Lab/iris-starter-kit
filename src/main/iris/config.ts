@@ -148,7 +148,7 @@ export function getIrisCliMissingMessage(): string {
 }
 
 export const IRIS_MODEL_DIR = getIrisModelDir();
-export const IRIS_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'triangulation_da3_startup');
+export const IRIS_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'auto_calibration');
 
 // Static pipeline settings live in pipeline-template.json. Only the values
 // that vary per run or per machine are filled in here. See

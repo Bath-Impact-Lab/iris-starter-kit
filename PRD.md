@@ -3,7 +3,7 @@
 ## Summary
 
 A minimal, open-source Electron + Vue desktop app that demonstrates the core
-IRIS markerless motion-capture flow end to end: configure cameras, run DA3
+IRIS markerless motion-capture flow end to end: configure cameras, run
 auto-calibration, then watch live camera feeds and a live 3D mocap skeleton
 driven by a real `iris_cli` process. It is a reference/starter implementation,
 not a commercial product.
@@ -18,7 +18,7 @@ codebase (e.g. Recapture V3).
 
 ## Goals
 
-- Show the complete IRIS flow in one thin app: camera setup → DA3 calibration
+- Show the complete IRIS flow in one thin app: camera setup → auto-calibration
   → live camera feeds + live pose skeleton.
 - Keep the codebase small enough to read end to end in one sitting.
 - Be a correct, working reference for wiring `iris_cli` from Electron/Node:
@@ -41,9 +41,9 @@ than documentation alone.
 
 1. **Camera setup**: enumerate video input devices, live browser preview,
    configure resolution/FPS/rotation per camera, persisted to `localStorage`.
-2. **DA3 calibration**: starts a real `iris_cli run` process (opens cameras,
-   warms up detection/pose/triangulation, runs DA3 startup calibration
-   inline) and a `monitor` process to detect when a person is tracked.
+2. **Auto-calibration**: starts a real `iris_cli run` process (opens cameras,
+   warms up detection/pose/triangulation, runs startup calibration inline)
+   and a `monitor` process to detect when a person is tracked.
 3. **Live view**
    - **Camera feeds**: each pane decodes IRIS's own per-camera video-pipe
      output (H.264 Annex-B over a named pipe → local WebSocket relay →
@@ -60,7 +60,7 @@ than documentation alone.
 
 - Recorded-session playback/export.
 - Multi-participant tracking UI (IRIS supports it; this UI assumes one).
-- Any 3D scene/point-cloud viewer (DA3 reconstruction reader exists in IRIS
+- Any 3D scene/point-cloud viewer (a reconstruction reader exists in IRIS
   but isn't wired into this UI).
 
 ## Requirements / constraints
