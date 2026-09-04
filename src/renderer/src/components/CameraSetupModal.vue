@@ -8,20 +8,12 @@ import AppModal from './AppModal.vue';
 
 const props = defineProps<{
   open: boolean;
-  // True when reopened from Settings to edit an already-running setup,
-  // rather than the first-time setup flow.
+  // True when reopened from Settings to edit an already-running setup.
   editing?: boolean;
-  // IRIS's own live video streams, keyed by camera index -- while editing,
-  // IRIS's `run` process already holds each camera device exclusively, so a
-  // second independent `getUserMedia()` grab fails ("Device in use"). Reuse
-  // IRIS's own feed for the preview instead of trying (and failing) to open
-  // the camera a second time.
+  // IRIS's own live video streams -- reused for the preview since IRIS
+  // already holds each device and a second getUserMedia() grab would fail.
   videoStreams?: VideoStreamDescriptor[];
-  // The config IRIS is actually running right now (while editing). Devices
-  // already in here are busy -- re-probing them via getUserMedia would just
-  // fail and silently overwrite their real resolution/fps with fallback
-  // defaults, which looked like an unrelated config change and triggered a
-  // needless recalibration. Reuse these values verbatim instead.
+  // The config IRIS is actually running right now (while editing).
   currentConfig?: CameraConfig[];
 }>();
 
@@ -38,14 +30,8 @@ const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
 const loading = ref(false);
 
-// IRIS-stream-backed previews (used while `editing`), decoded the same way
-// LiveView does. Keyed by deviceId, not by this modal's own rendering
-// position -- `videoStreams` is indexed by each camera's position in
-// `currentConfig` (the config IRIS is actually running), which can differ
-// from the order this modal's own fresh `listVideoInputs()` call happens to
-// return. Looking a stream up by rendering position risked showing one
-// camera's card with a different camera's video (and thus a different
-// camera's baked-in rotation) attached.
+// IRIS-stream-backed previews, decoded like LiveView. Keyed by deviceId, not rendering position --
+// videoStreams is indexed by position in currentConfig, which this modal's own device order can disagree with.
 const canvasElements = new Map<string, HTMLCanvasElement>();
 const irisDecoders = new Map<string, H264AnnexBDecoder>();
 const irisDecoderUrls = new Map<string, string>();
@@ -177,10 +163,7 @@ async function loadCameras() {
     const devices = await listVideoInputs();
     const knownByDeviceId = new Map((props.editing ? props.currentConfig : undefined)?.map((c) => [c.deviceId, c]) ?? []);
 
-    // Devices IRIS already has open are busy -- probing them re-requests
-    // getUserMedia, which fails ("Device in use") and silently overwrites
-    // their real resolution/fps with fallback defaults. Reuse what's
-    // actually running for those instead of re-probing them.
+    // Probing a device IRIS already holds fails and overwrites its real resolution/fps with fallback defaults.
     const toProbe = devices.filter((d) => !knownByDeviceId.has(d.deviceId));
     const probed = await Promise.all(toProbe.map((d) => probeCamera(d.deviceId)));
     const probedById = new Map(probed.map((p) => [p.id, p]));
@@ -235,20 +218,13 @@ async function loadCameras() {
   }
 }
 
-// After loading, auto-expand all and start previews
 async function postLoadSetup() {
   const all = new Set<string>();
   cameras.value.forEach((c) => all.add(c.deviceId));
   expandedIds.value = all;
   await nextTick();
   await Promise.all(
-    cameras.value.map((c) => {
-      // While editing, IRIS already holds this device natively -- reuse its
-      // stream (rendered via the canvas path) instead of racing it for the
-      // camera with a second getUserMedia() call.
-      if (hasIrisStream(c.deviceId)) return Promise.resolve();
-      return startPreview(c.deviceId);
-    }),
+    cameras.value.map((c) => (hasIrisStream(c.deviceId) ? Promise.resolve() : startPreview(c.deviceId))),
   );
 }
 
@@ -346,9 +322,7 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
-      // Re-probe every time the modal opens, not just the first time --
-      // otherwise plugging/unplugging cameras between sessions (or reopening
-      // from Settings) keeps showing whatever was detected on first load.
+      // Re-probe on every open, not just the first, to pick up plugged/unplugged cameras.
       void loadCameras().then(() => postLoadSetup());
     } else {
       expandedIds.value.clear();

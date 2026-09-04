@@ -10,8 +10,7 @@ const phase = ref<AppPhase>('camera-setup');
 const cameras = ref<CameraConfig[]>([]);
 const cameraSetupOpen = ref(true);
 const calibrationOpen = ref(false);
-// Bumped every time calibration is (re)started so CalibrationModal remounts
-// with fresh internal state instead of reusing a previous 'done' status.
+// Bumped on each (re)start so CalibrationModal remounts instead of reusing a stale 'done' status.
 const calibrationSessionId = ref(0);
 const settingsOpen = ref(false);
 const liveFps = ref(0);
@@ -125,11 +124,7 @@ async function openIrisPreview() {
   }
 }
 
-// Not every edit needs the same reaction. Which cameras are selected, and
-// at what resolution/fps, is baked into the IRIS run's config file at
-// startup and can only take effect via a real restart. Display name and
-// rotation are just how the UI renders things -- reflected the moment
-// `cameras.value` updates, no pipeline restart needed.
+// Device/resolution/fps changes need a pipeline restart; label/rotation are display-only.
 interface CameraChangeSet {
   devicesChanged: boolean;
   captureChanged: boolean;
@@ -158,8 +153,6 @@ function diffCameras(next: CameraConfig[], prev: CameraConfig[]): CameraChangeSe
 async function onCameraSetupContinue(config: CameraConfig[]) {
   cameraSetupOpen.value = false;
 
-  // A run is already active (either mid-calibration or fully live) --
-  // reopening setup at this point is an edit, not a fresh start.
   const wasRunning = phase.value !== 'camera-setup';
   const changes = wasRunning ? diffCameras(config, cameras.value) : null;
   cameras.value = config;
@@ -182,8 +175,6 @@ async function onCameraSetupContinue(config: CameraConfig[]) {
   }
 
   if (!wasRunning) {
-    // First-time setup (or re-entering after a stop) -- always run the full
-    // start-then-calibrate flow.
     phase.value = 'calibration';
     calibrationSessionId.value += 1;
     calibrationOpen.value = true;
@@ -192,17 +183,9 @@ async function onCameraSetupContinue(config: CameraConfig[]) {
   }
 
   const needsRecalibration = changes!.devicesChanged || changes!.captureChanged;
-  if (!needsRecalibration) {
-    // Only labels/rotation changed (or nothing did) -- `cameras.value` above
-    // already updated the preview reactively. Stay put (live or still
-    // calibrating), no restart.
-    return;
-  }
+  if (!needsRecalibration) return;
 
-  // Cameras, resolution, or fps changed: the running IRIS process was
-  // started with the old config and can't be updated in place, so it has to
-  // be replaced. Tear it down before starting a new one so the two don't
-  // fight over the same camera devices.
+  // Running IRIS process was started with the old config; replace it rather than fight over the devices.
   try {
     await getIrisApi()?.stopAll?.();
   } catch {
@@ -228,10 +211,7 @@ function onCalibrationComplete() {
 function onCalibrationClose() {
   calibrationOpen.value = false;
 
-  // Starting a calibration attempt steals the shared monitor pipe from the
-  // live preview (only one process can hold it at a time). If the user
-  // backs out before it finishes, make sure live view keeps getting frames
-  // instead of silently going stale.
+  // Calibration steals the shared monitor pipe from the live preview; reclaim it if the user backs out.
   if (phase.value === 'live') {
     void openIrisPreview();
   }
@@ -244,9 +224,7 @@ function reopenSetup() {
 
 function reopenCalibration() {
   settingsOpen.value = false;
-  // Explicit request to redo calibration -- always start a fresh attempt
-  // rather than reusing a previous session's already-'done' status.
-  calibrationSessionId.value += 1;
+  calibrationSessionId.value += 1; // always start a fresh attempt
   calibrationOpen.value = true;
 }
 </script>
