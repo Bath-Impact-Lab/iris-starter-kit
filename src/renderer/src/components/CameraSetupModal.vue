@@ -1,12 +1,28 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { CameraConfig, CameraDevice, Resolution } from '../types';
+import type { CameraConfig, CameraDevice, Resolution, VideoStreamDescriptor } from '../types';
 import { ROTATION_OPTIONS } from '../data/mock';
 import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig } from '../utils/camera-probe';
+import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import AppModal from './AppModal.vue';
 
 const props = defineProps<{
   open: boolean;
+  // True when reopened from Settings to edit an already-running setup,
+  // rather than the first-time setup flow.
+  editing?: boolean;
+  // IRIS's own live video streams, keyed by camera index -- while editing,
+  // IRIS's `run` process already holds each camera device exclusively, so a
+  // second independent `getUserMedia()` grab fails ("Device in use"). Reuse
+  // IRIS's own feed for the preview instead of trying (and failing) to open
+  // the camera a second time.
+  videoStreams?: VideoStreamDescriptor[];
+  // The config IRIS is actually running right now (while editing). Devices
+  // already in here are busy -- re-probing them via getUserMedia would just
+  // fail and silently overwrite their real resolution/fps with fallback
+  // defaults, which looked like an unrelated config change and triggered a
+  // needless recalibration. Reuse these values verbatim instead.
+  currentConfig?: CameraConfig[];
 }>();
 
 const emit = defineEmits<{
@@ -21,6 +37,93 @@ const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
 const loading = ref(false);
+
+// IRIS-stream-backed previews (used while `editing`), decoded the same way
+// LiveView does -- keyed by camera index, not deviceId, since that's how
+// `videoStreams` is indexed.
+const canvasElements = new Map<number, HTMLCanvasElement>();
+const irisDecoders = new Map<number, H264AnnexBDecoder>();
+const irisDecoderUrls = new Map<number, string>();
+const failedIrisStreams = ref<Set<number>>(new Set());
+
+function irisStreamUrlFor(index: number): string | null {
+  return props.videoStreams?.find((stream) => stream.cameraId === index)?.url ?? null;
+}
+
+function hasIrisStream(index: number): boolean {
+  return !!props.editing && irisStreamUrlFor(index) !== null && !failedIrisStreams.value.has(index);
+}
+
+function detachIrisDecoder(index: number): void {
+  const decoder = irisDecoders.get(index);
+  if (!decoder) return;
+
+  decoder.stop();
+  irisDecoders.delete(index);
+  irisDecoderUrls.delete(index);
+}
+
+function attachIrisDecoder(index: number): void {
+  const url = irisStreamUrlFor(index);
+  if (!url || failedIrisStreams.value.has(index)) return;
+  if (irisDecoderUrls.get(index) === url) return;
+
+  detachIrisDecoder(index);
+
+  const decoder = new H264AnnexBDecoder(
+    url,
+    (frame) => {
+      const canvas = canvasElements.get(index);
+      if (canvas) {
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        canvas.getContext('2d')?.drawImage(frame, 0, 0);
+      }
+      frame.close();
+    },
+    (status) => {
+      if (status === 'failed') {
+        failedIrisStreams.value = new Set(failedIrisStreams.value).add(index);
+        detachIrisDecoder(index);
+      }
+    },
+  );
+  decoder.start();
+
+  irisDecoders.set(index, decoder);
+  irisDecoderUrls.set(index, url);
+}
+
+function setCanvasRef(index: number) {
+  return (el: HTMLCanvasElement | null) => {
+    if (el) {
+      canvasElements.set(index, el);
+      attachIrisDecoder(index);
+    } else {
+      canvasElements.delete(index);
+    }
+  };
+}
+
+watch(
+  () => props.videoStreams,
+  (streams) => {
+    failedIrisStreams.value = new Set();
+    const wanted = new Set((streams ?? []).map((stream) => stream.cameraId));
+    for (const index of [...irisDecoders.keys()]) {
+      if (!wanted.has(index)) detachIrisDecoder(index);
+    }
+    for (const stream of streams ?? []) {
+      if (canvasElements.has(stream.cameraId)) attachIrisDecoder(stream.cameraId);
+    }
+  },
+);
+
+function detachAllIrisDecoders(): void {
+  for (const index of [...irisDecoders.keys()]) detachIrisDecoder(index);
+}
 
 const selectableResolutions = computed<Resolution[]>(() => {
   const common = getCommonResolutionOptions(deviceProfiles.value);
@@ -62,14 +165,33 @@ async function loadCameras() {
   try {
     await ensurePermission();
     const devices = await listVideoInputs();
-    const probed = await Promise.all(devices.map((d) => probeCamera(d.deviceId)));
-    deviceProfiles.value = probed as CameraDevice[];
+    const knownByDeviceId = new Map((props.editing ? props.currentConfig : undefined)?.map((c) => [c.deviceId, c]) ?? []);
+
+    // Devices IRIS already has open are busy -- probing them re-requests
+    // getUserMedia, which fails ("Device in use") and silently overwrites
+    // their real resolution/fps with fallback defaults. Reuse what's
+    // actually running for those instead of re-probing them.
+    const toProbe = devices.filter((d) => !knownByDeviceId.has(d.deviceId));
+    const probed = await Promise.all(toProbe.map((d) => probeCamera(d.deviceId)));
+    const probedById = new Map(probed.map((p) => [p.id, p]));
+
+    deviceProfiles.value = devices.map((d) => {
+      const known = knownByDeviceId.get(d.deviceId);
+      return (
+        probedById.get(d.deviceId) ??
+        ({ id: d.deviceId, label: known?.label ?? d.label, defaultRotation: known?.rotation ?? 0 } as CameraDevice)
+      );
+    });
+
     const common = selectCommonConfig(deviceProfiles.value);
     const preferredResolution = common.resolution ?? '1920x1080';
     const preferredFps = common.fps ?? 30;
 
-    cameras.value = probed.map((device, index) => {
-      const dev = device as CameraDevice;
+    cameras.value = devices.map((d, index) => {
+      const known = knownByDeviceId.get(d.deviceId);
+      if (known) return { ...known };
+
+      const dev = probedById.get(d.deviceId) ?? ({ id: d.deviceId, label: d.label, defaultRotation: 0 } as CameraDevice);
       const base = defaultConfig(dev, index);
       // Load persisted per-device config only for label and rotation
       const persistedRaw = localStorage.getItem(`camera-config:${dev.id}`);
@@ -109,7 +231,15 @@ async function postLoadSetup() {
   cameras.value.forEach((c) => all.add(c.deviceId));
   expandedIds.value = all;
   await nextTick();
-  await Promise.all(cameras.value.map((c) => startPreview(c.deviceId)));
+  await Promise.all(
+    cameras.value.map((c, index) => {
+      // While editing, IRIS already holds this device natively -- reuse its
+      // stream (rendered via the canvas path) instead of racing it for the
+      // camera with a second getUserMedia() call.
+      if (hasIrisStream(index)) return Promise.resolve();
+      return startPreview(c.deviceId);
+    }),
+  );
 }
 
 // Persist per-device config whenever user changes settings
@@ -182,7 +312,10 @@ async function toggleCameraExpansion(deviceId: string) {
     stopPreview(deviceId);
   } else {
     nextExpanded.add(deviceId);
-    await startPreview(deviceId);
+    const index = cameras.value.findIndex((cam) => cam.deviceId === deviceId);
+    if (!hasIrisStream(index)) {
+      await startPreview(deviceId);
+    }
   }
   expandedIds.value = nextExpanded;
 }
@@ -191,7 +324,9 @@ async function toggleAllPreviews() {
   showAllPreviews.value = !showAllPreviews.value;
   if (showAllPreviews.value) {
     cameras.value.forEach((cam) => expandedIds.value.add(cam.deviceId));
-    await Promise.all(cameras.value.map((cam) => startPreview(cam.deviceId)));
+    await Promise.all(
+      cameras.value.map((cam, index) => (hasIrisStream(index) ? Promise.resolve() : startPreview(cam.deviceId))),
+    );
   } else {
     expandedIds.value.clear();
     stopAllPreviews();
@@ -201,13 +336,16 @@ async function toggleAllPreviews() {
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen && cameras.value.length === 0) {
-        void loadCameras().then(() => postLoadSetup());
-    }
-    if (!isOpen) {
+    if (isOpen) {
+      // Re-probe every time the modal opens, not just the first time --
+      // otherwise plugging/unplugging cameras between sessions (or reopening
+      // from Settings) keeps showing whatever was detected on first load.
+      void loadCameras().then(() => postLoadSetup());
+    } else {
       expandedIds.value.clear();
       showAllPreviews.value = false;
       stopAllPreviews();
+      detachAllIrisDecoders();
     }
   },
 );
@@ -218,6 +356,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopAllPreviews();
+  detachAllIrisDecoders();
 });
 
 function persistCameraConfig() {
@@ -272,7 +411,7 @@ function onDisplayNameChange(cam: CameraConfig) {
       <div class="loader-text">Detecting cameras…</div>
     </div>
     <div v-else class="camera-list">
-      <div v-for="cam in cameras" :key="cam.deviceId" class="camera-card">
+      <div v-for="(cam, index) in cameras" :key="cam.deviceId" class="camera-card">
         <button type="button" class="camera-summary" @click="toggleCameraExpansion(cam.deviceId)">
           <div>
             <div class="camera-title">{{ cam.label }}</div>
@@ -283,7 +422,14 @@ function onDisplayNameChange(cam: CameraConfig) {
 
         <div v-if="expandedIds.has(cam.deviceId)" class="camera-body">
           <div class="preview-panel">
+            <canvas
+              v-if="hasIrisStream(index)"
+              :ref="setCanvasRef(index)"
+              class="preview"
+              :style="{ transform: `rotate(${cam.rotation}deg)` }"
+            />
             <video
+              v-else
               :ref="setVideoRef(cam.deviceId)"
               class="preview"
               :style="{ transform: `rotate(${cam.rotation}deg)` }"
@@ -326,7 +472,7 @@ function onDisplayNameChange(cam: CameraConfig) {
     </div>
 
     <template #footer>
-      <button type="button" class="btn primary" @click="onContinue">Continue</button>
+      <button type="button" class="btn primary" @click="onContinue">{{ editing ? 'Done' : 'Continue' }}</button>
     </template>
   </AppModal>
 </template>
