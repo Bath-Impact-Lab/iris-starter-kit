@@ -39,41 +39,52 @@ const activeStreams = ref<Record<string, MediaStream>>({});
 const loading = ref(false);
 
 // IRIS-stream-backed previews (used while `editing`), decoded the same way
-// LiveView does -- keyed by camera index, not deviceId, since that's how
-// `videoStreams` is indexed.
-const canvasElements = new Map<number, HTMLCanvasElement>();
-const irisDecoders = new Map<number, H264AnnexBDecoder>();
-const irisDecoderUrls = new Map<number, string>();
-const failedIrisStreams = ref<Set<number>>(new Set());
+// LiveView does. Keyed by deviceId, not by this modal's own rendering
+// position -- `videoStreams` is indexed by each camera's position in
+// `currentConfig` (the config IRIS is actually running), which can differ
+// from the order this modal's own fresh `listVideoInputs()` call happens to
+// return. Looking a stream up by rendering position risked showing one
+// camera's card with a different camera's video (and thus a different
+// camera's baked-in rotation) attached.
+const canvasElements = new Map<string, HTMLCanvasElement>();
+const irisDecoders = new Map<string, H264AnnexBDecoder>();
+const irisDecoderUrls = new Map<string, string>();
+const failedIrisStreams = ref<Set<string>>(new Set());
 
-function irisStreamUrlFor(index: number): string | null {
-  return props.videoStreams?.find((stream) => stream.cameraId === index)?.url ?? null;
+function irisStreamIndexFor(deviceId: string): number {
+  return props.currentConfig?.findIndex((c) => c.deviceId === deviceId) ?? -1;
 }
 
-function hasIrisStream(index: number): boolean {
-  return !!props.editing && irisStreamUrlFor(index) !== null && !failedIrisStreams.value.has(index);
+function irisStreamUrlFor(deviceId: string): string | null {
+  const streamIndex = irisStreamIndexFor(deviceId);
+  if (streamIndex < 0) return null;
+  return props.videoStreams?.find((stream) => stream.cameraId === streamIndex)?.url ?? null;
 }
 
-function detachIrisDecoder(index: number): void {
-  const decoder = irisDecoders.get(index);
+function hasIrisStream(deviceId: string): boolean {
+  return !!props.editing && irisStreamUrlFor(deviceId) !== null && !failedIrisStreams.value.has(deviceId);
+}
+
+function detachIrisDecoder(deviceId: string): void {
+  const decoder = irisDecoders.get(deviceId);
   if (!decoder) return;
 
   decoder.stop();
-  irisDecoders.delete(index);
-  irisDecoderUrls.delete(index);
+  irisDecoders.delete(deviceId);
+  irisDecoderUrls.delete(deviceId);
 }
 
-function attachIrisDecoder(index: number): void {
-  const url = irisStreamUrlFor(index);
-  if (!url || failedIrisStreams.value.has(index)) return;
-  if (irisDecoderUrls.get(index) === url) return;
+function attachIrisDecoder(deviceId: string): void {
+  const url = irisStreamUrlFor(deviceId);
+  if (!url || failedIrisStreams.value.has(deviceId)) return;
+  if (irisDecoderUrls.get(deviceId) === url) return;
 
-  detachIrisDecoder(index);
+  detachIrisDecoder(deviceId);
 
   const decoder = new H264AnnexBDecoder(
     url,
     (frame) => {
-      const canvas = canvasElements.get(index);
+      const canvas = canvasElements.get(deviceId);
       if (canvas) {
         if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
           canvas.width = frame.displayWidth;
@@ -85,44 +96,43 @@ function attachIrisDecoder(index: number): void {
     },
     (status) => {
       if (status === 'failed') {
-        failedIrisStreams.value = new Set(failedIrisStreams.value).add(index);
-        detachIrisDecoder(index);
+        failedIrisStreams.value = new Set(failedIrisStreams.value).add(deviceId);
+        detachIrisDecoder(deviceId);
       }
     },
   );
   decoder.start();
 
-  irisDecoders.set(index, decoder);
-  irisDecoderUrls.set(index, url);
+  irisDecoders.set(deviceId, decoder);
+  irisDecoderUrls.set(deviceId, url);
 }
 
-function setCanvasRef(index: number) {
+function setCanvasRef(deviceId: string) {
   return (el: HTMLCanvasElement | null) => {
     if (el) {
-      canvasElements.set(index, el);
-      attachIrisDecoder(index);
+      canvasElements.set(deviceId, el);
+      attachIrisDecoder(deviceId);
     } else {
-      canvasElements.delete(index);
+      canvasElements.delete(deviceId);
     }
   };
 }
 
 watch(
   () => props.videoStreams,
-  (streams) => {
+  () => {
     failedIrisStreams.value = new Set();
-    const wanted = new Set((streams ?? []).map((stream) => stream.cameraId));
-    for (const index of [...irisDecoders.keys()]) {
-      if (!wanted.has(index)) detachIrisDecoder(index);
+    for (const deviceId of [...irisDecoders.keys()]) {
+      if (!hasIrisStream(deviceId)) detachIrisDecoder(deviceId);
     }
-    for (const stream of streams ?? []) {
-      if (canvasElements.has(stream.cameraId)) attachIrisDecoder(stream.cameraId);
+    for (const deviceId of canvasElements.keys()) {
+      if (hasIrisStream(deviceId)) attachIrisDecoder(deviceId);
     }
   },
 );
 
 function detachAllIrisDecoders(): void {
-  for (const index of [...irisDecoders.keys()]) detachIrisDecoder(index);
+  for (const deviceId of [...irisDecoders.keys()]) detachIrisDecoder(deviceId);
 }
 
 const selectableResolutions = computed<Resolution[]>(() => {
@@ -232,11 +242,11 @@ async function postLoadSetup() {
   expandedIds.value = all;
   await nextTick();
   await Promise.all(
-    cameras.value.map((c, index) => {
+    cameras.value.map((c) => {
       // While editing, IRIS already holds this device natively -- reuse its
       // stream (rendered via the canvas path) instead of racing it for the
       // camera with a second getUserMedia() call.
-      if (hasIrisStream(index)) return Promise.resolve();
+      if (hasIrisStream(c.deviceId)) return Promise.resolve();
       return startPreview(c.deviceId);
     }),
   );
@@ -312,8 +322,7 @@ async function toggleCameraExpansion(deviceId: string) {
     stopPreview(deviceId);
   } else {
     nextExpanded.add(deviceId);
-    const index = cameras.value.findIndex((cam) => cam.deviceId === deviceId);
-    if (!hasIrisStream(index)) {
+    if (!hasIrisStream(deviceId)) {
       await startPreview(deviceId);
     }
   }
@@ -325,7 +334,7 @@ async function toggleAllPreviews() {
   if (showAllPreviews.value) {
     cameras.value.forEach((cam) => expandedIds.value.add(cam.deviceId));
     await Promise.all(
-      cameras.value.map((cam, index) => (hasIrisStream(index) ? Promise.resolve() : startPreview(cam.deviceId))),
+      cameras.value.map((cam) => (hasIrisStream(cam.deviceId) ? Promise.resolve() : startPreview(cam.deviceId))),
     );
   } else {
     expandedIds.value.clear();
@@ -411,7 +420,7 @@ function onDisplayNameChange(cam: CameraConfig) {
       <div class="loader-text">Detecting cameras…</div>
     </div>
     <div v-else class="camera-list">
-      <div v-for="(cam, index) in cameras" :key="cam.deviceId" class="camera-card">
+      <div v-for="cam in cameras" :key="cam.deviceId" class="camera-card">
         <button type="button" class="camera-summary" @click="toggleCameraExpansion(cam.deviceId)">
           <div>
             <div class="camera-title">{{ cam.label }}</div>
@@ -423,8 +432,8 @@ function onDisplayNameChange(cam: CameraConfig) {
         <div v-if="expandedIds.has(cam.deviceId)" class="camera-body">
           <div class="preview-panel">
             <canvas
-              v-if="hasIrisStream(index)"
-              :ref="setCanvasRef(index)"
+              v-if="hasIrisStream(cam.deviceId)"
+              :ref="setCanvasRef(cam.deviceId)"
               class="preview"
               :style="{ transform: `rotate(${cam.rotation}deg)` }"
             />
