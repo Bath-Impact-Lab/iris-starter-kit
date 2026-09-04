@@ -17,11 +17,11 @@ const IRIS_MILESTONES: Array<{ marker: string; describe: (line: string) => strin
   },
   {
     marker: 'Waiting for startup DA3 calibration batch',
-    describe: () => 'DA3 startup calibration -- waiting on triangulation for enough frames to converge',
+    describe: () => 'auto-calibration -- waiting on triangulation for enough frames to converge',
   },
   {
     marker: 'Initialized live calibration from DA3 batch',
-    describe: (line) => `DA3 startup calibration converged -- ${line.trim()}`,
+    describe: (line) => `auto-calibration converged -- ${line.trim()}`,
   },
   {
     marker: 'Successfully attached to Shared Memory',
@@ -408,7 +408,7 @@ export class ProcessManager {
     }
     console.log(`[iris:run:${sessionId}] step 1/3 done -- ${cliPath}`)
 
-    console.log(`[iris:run:${sessionId}] step 2/3 -- writing pipeline spec (run_id, runtime, shared, pipeline incl. da3_startup_calibration)`)
+    console.log(`[iris:run:${sessionId}] step 2/3 -- writing pipeline spec (run_id, runtime, shared, pipeline incl. auto-calibration config)`)
     const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
     console.log(`[iris:run:${sessionId}] step 2/3 done -- ${cfgPath}`)
 
@@ -417,7 +417,7 @@ export class ProcessManager {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    console.log(`[iris:run:${sessionId}] step 3/3 done -- pid ${child.pid}; this process stays alive for capture, DA3 startup calibration, and live mocap -- watching stdout for milestones`)
+    console.log(`[iris:run:${sessionId}] step 3/3 done -- pid ${child.pid}; this process stays alive for capture, auto-calibration, and live mocap -- watching stdout for milestones`)
 
     child.stdout!.on('data', (chunk) => {
       const text = chunk.toString()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue';
-import type { CameraConfig, PoseFrame, VideoStreamDescriptor } from '../types';
+import type { CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from '../types';
 import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import PoseScene3D from './PoseScene3D.vue';
 
@@ -11,7 +11,23 @@ const props = defineProps<{
   jointsTotal: number;
   pose?: PoseFrame | null;
   videoStreams: VideoStreamDescriptor[];
+  // What IRIS actually baked into the video already (camera 0's rotation at last run start).
+  bakedRotation: number;
 }>();
+
+const mocapSettings = defineModel<MocapViewSettings>('mocapSettings', { required: true });
+
+// IRIS already rotated the incoming video by bakedRotation; only the leftover delta still needs
+// applying here (0 for camera 0 itself, in the common case).
+function displayRotation(rotation: number): number {
+  return ((rotation - props.bakedRotation) % 360 + 360) % 360;
+}
+
+// A camera's final (corrected) orientation is what its own configured angle says,
+// regardless of how much of that correction IRIS already baked in vs. what's left for CSS.
+function isPortrait(rotation: number): boolean {
+  return rotation === 90 || rotation === 270;
+}
 
 // Decodes IRIS's own video output rather than grabbing the camera again,
 // since IRIS already holds it while running.
@@ -111,7 +127,7 @@ onBeforeUnmount(() => {
           <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} fps</span>
         </header>
         <div class="feed mocap-feed">
-          <PoseScene3D :pose="pose" />
+          <PoseScene3D :pose="pose" :settings="mocapSettings" />
         </div>
       </section>
 
@@ -132,24 +148,34 @@ onBeforeUnmount(() => {
             <span class="stat-label">Cameras</span>
             <span class="stat-value">{{ cameras.length }}</span>
           </div>
+
+          <h4 class="settings-subhead">Mocap view</h4>
+          <label class="field">
+            <span>Skeleton length ({{ mocapSettings.scale.toFixed(1) }}x)</span>
+            <input type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
+          </label>
+          <label class="field">
+            <span>Bone thickness ({{ mocapSettings.boneThickness.toFixed(3) }})</span>
+            <input type="range" min="0.006" max="0.03" step="0.002" v-model.number="mocapSettings.boneThickness" />
+          </label>
         </div>
       </aside>
     </div>
 
     <div class="camera-grid">
-      <section v-for="(cam, index) in cameras" :key="cam.deviceId" class="pane">
+      <section v-for="(cam, index) in cameras" :key="cam.deviceId" class="pane camera-pane">
         <header class="pane-head">
           <span>{{ cam.label }}</span>
           <span class="meta">{{ cam.resolution }} · {{ cam.fps }} fps · {{ cam.rotation }}°</span>
         </header>
-        <div class="feed">
+        <div class="feed" :class="{ portrait: isPortrait(cam.rotation) }">
           <canvas
             v-if="hasStream(index)"
             :ref="setVideoRef(index)"
             class="feed-video"
-            :style="{ transform: `rotate(${cam.rotation}deg)` }"
+            :class="`rotate-${displayRotation(cam.rotation)}`"
           />
-          <div v-else class="feed-inner" :style="{ transform: `rotate(${cam.rotation}deg)` }">
+          <div v-else class="feed-inner" :class="`rotate-${displayRotation(cam.rotation)}`">
             <span class="feed-label">Camera feed</span>
           </div>
         </div>
@@ -210,12 +236,50 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
+.settings-subhead {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e8eaed;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #8b93a7;
+}
+
+.field input[type='range'] {
+  width: 100%;
+}
+
 .camera-grid {
   flex: 2;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
   gap: 12px;
   min-height: 0;
+  overflow-y: auto;
+}
+
+/* Fixed-size, fixed-aspect tiles laid out together -- not grid cells stretched to fill
+   whatever space happens to be available. */
+.camera-pane {
+  flex: 0 1 260px;
+}
+
+.camera-pane .feed {
+  flex: none;
+  width: 100%;
+  min-height: 0;
+  aspect-ratio: 3 / 2;
+}
+
+.camera-pane .feed.portrait {
+  aspect-ratio: 4 / 5;
 }
 
 .pane {
@@ -251,7 +315,24 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  /* lets rotate-90/270 size themselves off this element's own box, not the viewport */
+  container-type: size;
 }
+
+/* A 90/270 rotation swaps visual width/height, so the pre-rotation box must too --
+   otherwise the rotated content is clipped to the original (wrong) aspect ratio. */
+.feed-video.rotate-90,
+.feed-inner.rotate-90,
+.feed-video.rotate-270,
+.feed-inner.rotate-270 {
+  width: 100cqh;
+  height: 100cqw;
+}
+
+.rotate-0 { transform: rotate(0deg); }
+.rotate-90 { transform: rotate(90deg); }
+.rotate-180 { transform: rotate(180deg); }
+.rotate-270 { transform: rotate(270deg); }
 
 .feed-inner {
   width: 100%;

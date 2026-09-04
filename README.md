@@ -2,7 +2,7 @@
 
 Open-source, lightweight Electron starter for [IRIS](https://github.com/Bath-Impact-Lab/IRIS) markerless motion capture apps.
 
-This project is intentionally minimal and not a commercial product. It exists as a small, readable base for exploring the core IRIS flow (camera configuration, DA3 calibration, and live motion capture) against a real `iris_cli` process, not a mock. The goal is to stay easy to understand, easy to run, and easy to extend without pulling in a full production architecture.
+This project is intentionally minimal and not a commercial product. It exists as a small, readable base for exploring the core IRIS flow (camera configuration, auto-calibration, and live motion capture) against a real `iris_cli` process, not a mock. The goal is to stay easy to understand, easy to run, and easy to extend without pulling in a full production architecture.
 
 ## Stack
 
@@ -14,13 +14,13 @@ This project is intentionally minimal and not a commercial product. It exists as
 ## Flow
 
 1. **Camera setup**: pick cameras, set resolution/FPS/rotation, see a live browser preview.
-2. **Calibration**: starts a real `iris_cli run` process and runs IRIS's DA3 startup calibration.
+2. **Calibration**: starts a real `iris_cli run` process and runs IRIS's startup auto-calibration.
 3. **Live view**: once calibrated, live per-camera video feeds decoded straight from IRIS's own video pipes, plus a live 2D pose skeleton driven by IRIS's real pose output.
 
 ## What's included
 
 - Camera setup (resolution, FPS, rotation per camera), persisted per device
-- Real DA3 calibration against a running `iris_cli` process
+- Real auto-calibration against a running `iris_cli` process
 - Live view: real decoded camera feeds and a real live mocap skeleton, side by side
 - A narrow, typed `window.irisStarter` IPC bridge connecting the two
 - Small, readable project layout suitable for experimentation

@@ -92,7 +92,7 @@ async function startCalibration() {
 
   try {
     const result = await api.startPoseStream({
-      mode: 'da3_startup',
+      mode: 'auto_calibration',
       cameras: props.cameras.map((cam) => ({
         id: cam.deviceId,
         label: cam.label,
@@ -100,7 +100,7 @@ async function startCalibration() {
         fps: cam.fps,
         rotation: cam.rotation,
       })),
-      calibration: { type: 'da3_startup' },
+      calibration: { type: 'auto_calibration' },
       output: { shm_name: 'iris_shm_ipc' },
     });
 
@@ -170,7 +170,7 @@ onBeforeUnmount(() => {
 
 <template>
   <AppModal title="Calibration" :open="open" @close="onClose">
-    <p class="lead">IRIS will auto-calibrate the stage using DA3. Keep the capture area clear.</p>
+    <p class="lead">IRIS will auto-calibrate the stage. Keep the capture area clear.</p>
 
     <div class="progress-wrap">
       <div class="progress-bar">

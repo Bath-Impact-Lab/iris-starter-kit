@@ -24,6 +24,11 @@ export interface RunConfig {
   cameras: CameraConfig[];
 }
 
+export interface MocapViewSettings {
+  scale: number;
+  boneThickness: number;
+}
+
 // One tracked person's pose for a single frame.
 export interface PosePerson {
   person_id?: number;
