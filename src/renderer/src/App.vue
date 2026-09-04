@@ -9,7 +9,9 @@ import LiveView from './components/LiveView.vue';
 const phase = ref<AppPhase>('camera-setup');
 const cameras = ref<CameraConfig[]>([]);
 const cameraSetupOpen = ref(true);
-const calibrationOpen = ref(true);
+const calibrationOpen = ref(false);
+// Bumped on each (re)start so CalibrationModal remounts instead of reusing a stale 'done' status.
+const calibrationSessionId = ref(0);
 const settingsOpen = ref(false);
 const liveFps = ref(0);
 const liveJoints = ref({ valid: 0, total: BODY_JOINT_COUNT });
@@ -122,11 +124,38 @@ async function openIrisPreview() {
   }
 }
 
-function onCameraSetupContinue(config: CameraConfig[]) {
-  cameras.value = config;
+// Device/resolution/fps changes need a pipeline restart; label/rotation are display-only.
+interface CameraChangeSet {
+  devicesChanged: boolean;
+  captureChanged: boolean;
+  previewChanged: boolean;
+}
+
+function diffCameras(next: CameraConfig[], prev: CameraConfig[]): CameraChangeSet {
+  const devicesChanged =
+    next.length !== prev.length || next.some((cam, index) => cam.deviceId !== prev[index]?.deviceId);
+
+  const captureChanged =
+    !devicesChanged &&
+    next.some((cam, index) => {
+      const other = prev[index]!;
+      return cam.resolution !== other.resolution || cam.fps !== other.fps;
+    });
+
+  const previewChanged = next.some((cam, index) => {
+    const other = prev[index];
+    return !other || cam.label !== other.label || cam.rotation !== other.rotation;
+  });
+
+  return { devicesChanged, captureChanged, previewChanged };
+}
+
+async function onCameraSetupContinue(config: CameraConfig[]) {
   cameraSetupOpen.value = false;
-  phase.value = 'calibration';
-  calibrationOpen.value = true;
+
+  const wasRunning = phase.value !== 'camera-setup';
+  const changes = wasRunning ? diffCameras(config, cameras.value) : null;
+  cameras.value = config;
 
   try {
     const api = getIrisApi();
@@ -145,6 +174,27 @@ function onCameraSetupContinue(config: CameraConfig[]) {
     // ignore missing or failing bridge; navigation should still continue
   }
 
+  if (!wasRunning) {
+    phase.value = 'calibration';
+    calibrationSessionId.value += 1;
+    calibrationOpen.value = true;
+    void startIrisRun(config);
+    return;
+  }
+
+  const needsRecalibration = changes!.devicesChanged || changes!.captureChanged;
+  if (!needsRecalibration) return;
+
+  // Running IRIS process was started with the old config; replace it rather than fight over the devices.
+  try {
+    await getIrisApi()?.stopAll?.();
+  } catch {
+    // ignore shutdown issues; startIrisRun below will surface real failures
+  }
+
+  phase.value = 'calibration';
+  calibrationSessionId.value += 1;
+  calibrationOpen.value = true;
   void startIrisRun(config);
 }
 
@@ -153,7 +203,6 @@ function onCameraSetupClose() {
 }
 
 function onCalibrationComplete() {
-  if (phase.value === 'live') return;
   calibrationOpen.value = false;
   phase.value = 'live';
   void openIrisPreview();
@@ -161,17 +210,21 @@ function onCalibrationComplete() {
 
 function onCalibrationClose() {
   calibrationOpen.value = false;
+
+  // Calibration steals the shared monitor pipe from the live preview; reclaim it if the user backs out.
+  if (phase.value === 'live') {
+    void openIrisPreview();
+  }
 }
 
 function reopenSetup() {
   settingsOpen.value = false;
-  phase.value = 'camera-setup';
   cameraSetupOpen.value = true;
 }
 
 function reopenCalibration() {
   settingsOpen.value = false;
-  phase.value = 'calibration';
+  calibrationSessionId.value += 1; // always start a fresh attempt
   calibrationOpen.value = true;
 }
 </script>
@@ -225,12 +278,16 @@ function reopenCalibration() {
     </main>
 
     <CameraSetupModal
-      :open="phase === 'camera-setup' && cameraSetupOpen"
+      :open="cameraSetupOpen"
+      :editing="phase !== 'camera-setup'"
+      :video-streams="videoStreams"
+      :current-config="cameras"
       @continue="onCameraSetupContinue"
       @close="onCameraSetupClose"
     />
     <CalibrationModal
-      :open="phase === 'calibration' && calibrationOpen"
+      :key="calibrationSessionId"
+      :open="calibrationOpen"
       :cameras="cameras"
       @complete="onCalibrationComplete"
       @close="onCalibrationClose"

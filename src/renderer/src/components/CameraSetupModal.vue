@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { CameraConfig, CameraDevice, Resolution } from '../types';
+import type { CameraConfig, CameraDevice, Resolution, VideoStreamDescriptor } from '../types';
 import { ROTATION_OPTIONS } from '../data/mock';
 import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig } from '../utils/camera-probe';
+import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import AppModal from './AppModal.vue';
 
 const props = defineProps<{
   open: boolean;
+  // True when reopened from Settings to edit an already-running setup.
+  editing?: boolean;
+  // IRIS's own live video streams -- reused for the preview since IRIS
+  // already holds each device and a second getUserMedia() grab would fail.
+  videoStreams?: VideoStreamDescriptor[];
+  // The config IRIS is actually running right now (while editing).
+  currentConfig?: CameraConfig[];
 }>();
 
 const emit = defineEmits<{
@@ -21,6 +29,97 @@ const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
 const loading = ref(false);
+
+// IRIS-stream-backed previews, decoded like LiveView. Keyed by deviceId, not rendering position --
+// videoStreams is indexed by position in currentConfig, which this modal's own device order can disagree with.
+const canvasElements = new Map<string, HTMLCanvasElement>();
+const irisDecoders = new Map<string, H264AnnexBDecoder>();
+const irisDecoderUrls = new Map<string, string>();
+const failedIrisStreams = ref<Set<string>>(new Set());
+
+function irisStreamIndexFor(deviceId: string): number {
+  return props.currentConfig?.findIndex((c) => c.deviceId === deviceId) ?? -1;
+}
+
+function irisStreamUrlFor(deviceId: string): string | null {
+  const streamIndex = irisStreamIndexFor(deviceId);
+  if (streamIndex < 0) return null;
+  return props.videoStreams?.find((stream) => stream.cameraId === streamIndex)?.url ?? null;
+}
+
+function hasIrisStream(deviceId: string): boolean {
+  return !!props.editing && irisStreamUrlFor(deviceId) !== null && !failedIrisStreams.value.has(deviceId);
+}
+
+function detachIrisDecoder(deviceId: string): void {
+  const decoder = irisDecoders.get(deviceId);
+  if (!decoder) return;
+
+  decoder.stop();
+  irisDecoders.delete(deviceId);
+  irisDecoderUrls.delete(deviceId);
+}
+
+function attachIrisDecoder(deviceId: string): void {
+  const url = irisStreamUrlFor(deviceId);
+  if (!url || failedIrisStreams.value.has(deviceId)) return;
+  if (irisDecoderUrls.get(deviceId) === url) return;
+
+  detachIrisDecoder(deviceId);
+
+  const decoder = new H264AnnexBDecoder(
+    url,
+    (frame) => {
+      const canvas = canvasElements.get(deviceId);
+      if (canvas) {
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        canvas.getContext('2d')?.drawImage(frame, 0, 0);
+      }
+      frame.close();
+    },
+    (status) => {
+      if (status === 'failed') {
+        failedIrisStreams.value = new Set(failedIrisStreams.value).add(deviceId);
+        detachIrisDecoder(deviceId);
+      }
+    },
+  );
+  decoder.start();
+
+  irisDecoders.set(deviceId, decoder);
+  irisDecoderUrls.set(deviceId, url);
+}
+
+function setCanvasRef(deviceId: string) {
+  return (el: HTMLCanvasElement | null) => {
+    if (el) {
+      canvasElements.set(deviceId, el);
+      attachIrisDecoder(deviceId);
+    } else {
+      canvasElements.delete(deviceId);
+    }
+  };
+}
+
+watch(
+  () => props.videoStreams,
+  () => {
+    failedIrisStreams.value = new Set();
+    for (const deviceId of [...irisDecoders.keys()]) {
+      if (!hasIrisStream(deviceId)) detachIrisDecoder(deviceId);
+    }
+    for (const deviceId of canvasElements.keys()) {
+      if (hasIrisStream(deviceId)) attachIrisDecoder(deviceId);
+    }
+  },
+);
+
+function detachAllIrisDecoders(): void {
+  for (const deviceId of [...irisDecoders.keys()]) detachIrisDecoder(deviceId);
+}
 
 const selectableResolutions = computed<Resolution[]>(() => {
   const common = getCommonResolutionOptions(deviceProfiles.value);
@@ -62,14 +161,30 @@ async function loadCameras() {
   try {
     await ensurePermission();
     const devices = await listVideoInputs();
-    const probed = await Promise.all(devices.map((d) => probeCamera(d.deviceId)));
-    deviceProfiles.value = probed as CameraDevice[];
+    const knownByDeviceId = new Map((props.editing ? props.currentConfig : undefined)?.map((c) => [c.deviceId, c]) ?? []);
+
+    // Probing a device IRIS already holds fails and overwrites its real resolution/fps with fallback defaults.
+    const toProbe = devices.filter((d) => !knownByDeviceId.has(d.deviceId));
+    const probed = await Promise.all(toProbe.map((d) => probeCamera(d.deviceId)));
+    const probedById = new Map(probed.map((p) => [p.id, p]));
+
+    deviceProfiles.value = devices.map((d) => {
+      const known = knownByDeviceId.get(d.deviceId);
+      return (
+        probedById.get(d.deviceId) ??
+        ({ id: d.deviceId, label: known?.label ?? d.label, defaultRotation: known?.rotation ?? 0 } as CameraDevice)
+      );
+    });
+
     const common = selectCommonConfig(deviceProfiles.value);
     const preferredResolution = common.resolution ?? '1920x1080';
     const preferredFps = common.fps ?? 30;
 
-    cameras.value = probed.map((device, index) => {
-      const dev = device as CameraDevice;
+    cameras.value = devices.map((d, index) => {
+      const known = knownByDeviceId.get(d.deviceId);
+      if (known) return { ...known };
+
+      const dev = probedById.get(d.deviceId) ?? ({ id: d.deviceId, label: d.label, defaultRotation: 0 } as CameraDevice);
       const base = defaultConfig(dev, index);
       // Load persisted per-device config only for label and rotation
       const persistedRaw = localStorage.getItem(`camera-config:${dev.id}`);
@@ -103,13 +218,14 @@ async function loadCameras() {
   }
 }
 
-// After loading, auto-expand all and start previews
 async function postLoadSetup() {
   const all = new Set<string>();
   cameras.value.forEach((c) => all.add(c.deviceId));
   expandedIds.value = all;
   await nextTick();
-  await Promise.all(cameras.value.map((c) => startPreview(c.deviceId)));
+  await Promise.all(
+    cameras.value.map((c) => (hasIrisStream(c.deviceId) ? Promise.resolve() : startPreview(c.deviceId))),
+  );
 }
 
 // Persist per-device config whenever user changes settings
@@ -182,7 +298,9 @@ async function toggleCameraExpansion(deviceId: string) {
     stopPreview(deviceId);
   } else {
     nextExpanded.add(deviceId);
-    await startPreview(deviceId);
+    if (!hasIrisStream(deviceId)) {
+      await startPreview(deviceId);
+    }
   }
   expandedIds.value = nextExpanded;
 }
@@ -191,7 +309,9 @@ async function toggleAllPreviews() {
   showAllPreviews.value = !showAllPreviews.value;
   if (showAllPreviews.value) {
     cameras.value.forEach((cam) => expandedIds.value.add(cam.deviceId));
-    await Promise.all(cameras.value.map((cam) => startPreview(cam.deviceId)));
+    await Promise.all(
+      cameras.value.map((cam) => (hasIrisStream(cam.deviceId) ? Promise.resolve() : startPreview(cam.deviceId))),
+    );
   } else {
     expandedIds.value.clear();
     stopAllPreviews();
@@ -201,13 +321,14 @@ async function toggleAllPreviews() {
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen && cameras.value.length === 0) {
-        void loadCameras().then(() => postLoadSetup());
-    }
-    if (!isOpen) {
+    if (isOpen) {
+      // Re-probe on every open, not just the first, to pick up plugged/unplugged cameras.
+      void loadCameras().then(() => postLoadSetup());
+    } else {
       expandedIds.value.clear();
       showAllPreviews.value = false;
       stopAllPreviews();
+      detachAllIrisDecoders();
     }
   },
 );
@@ -218,6 +339,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopAllPreviews();
+  detachAllIrisDecoders();
 });
 
 function persistCameraConfig() {
@@ -283,7 +405,14 @@ function onDisplayNameChange(cam: CameraConfig) {
 
         <div v-if="expandedIds.has(cam.deviceId)" class="camera-body">
           <div class="preview-panel">
+            <canvas
+              v-if="hasIrisStream(cam.deviceId)"
+              :ref="setCanvasRef(cam.deviceId)"
+              class="preview"
+              :style="{ transform: `rotate(${cam.rotation}deg)` }"
+            />
             <video
+              v-else
               :ref="setVideoRef(cam.deviceId)"
               class="preview"
               :style="{ transform: `rotate(${cam.rotation}deg)` }"
@@ -326,7 +455,7 @@ function onDisplayNameChange(cam: CameraConfig) {
     </div>
 
     <template #footer>
-      <button type="button" class="btn primary" @click="onContinue">Continue</button>
+      <button type="button" class="btn primary" @click="onContinue">{{ editing ? 'Done' : 'Continue' }}</button>
     </template>
   </AppModal>
 </template>
