@@ -1,6 +1,6 @@
 {
   "name": "iris-starter-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Simple open-source Electron starter for IRIS markerless mocap apps",
   "author": "Bath Impact Lab",
   "license": "MIT",
