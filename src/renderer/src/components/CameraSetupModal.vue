@@ -34,6 +34,9 @@ const emit = defineEmits<{
 const cameras = ref<CameraConfig[]>([]);
 const deviceProfiles = ref<CameraDevice[]>([]);
 const expandedIds = ref<Set<string>>(new Set());
+// Devices the OS reports but the user has ruled out (stale/ghost entries that don't
+// actually exist, or cameras they just don't want IRIS to use). Defaults to selected.
+const selectedIds = ref<Set<string>>(new Set());
 const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
@@ -165,6 +168,16 @@ function defaultConfig(device: CameraDevice, index: number): CameraConfig {
   };
 }
 
+function readPersistedSelection(deviceId: string): boolean {
+  const raw = localStorage.getItem(`camera-config:${deviceId}`);
+  try {
+    const persisted = raw ? JSON.parse(raw) : null;
+    return persisted?.selected !== false;
+  } catch {
+    return true;
+  }
+}
+
 async function loadCameras() {
   loading.value = true;
   try {
@@ -212,15 +225,27 @@ async function loadCameras() {
         rotation: persisted?.rotation ?? base.rotation,
       } as CameraConfig;
     });
+
+    // A currently-running (known) device was selected when the run started; anything
+    // else falls back to its persisted choice, defaulting to selected for new devices.
+    selectedIds.value = new Set(
+      cameras.value
+        .filter((cam) => knownByDeviceId.has(cam.deviceId) || readPersistedSelection(cam.deviceId))
+        .map((cam) => cam.deviceId),
+    );
   } catch (err) {
     // fallback to existing bridge if present
     if ((window as any).irisStarter && (window as any).irisStarter.listCameras) {
       const devices = await (window as any).irisStarter.listCameras();
       deviceProfiles.value = devices as CameraDevice[];
       cameras.value = devices.map((device: CameraDevice, index: number) => defaultConfig(device, index));
+      selectedIds.value = new Set(
+        cameras.value.filter((cam) => readPersistedSelection(cam.deviceId)).map((cam) => cam.deviceId),
+      );
     } else {
       deviceProfiles.value = [];
       cameras.value = [];
+      selectedIds.value = new Set();
     }
   } finally {
     loading.value = false;
@@ -255,6 +280,30 @@ watch(
   },
   { deep: true },
 );
+
+function isSelected(deviceId: string): boolean {
+  return selectedIds.value.has(deviceId);
+}
+
+function persistSelection(deviceId: string, selected: boolean): void {
+  const key = `camera-config:${deviceId}`;
+  const prevRaw = localStorage.getItem(key);
+  const prev = prevRaw ? JSON.parse(prevRaw) : {};
+  try {
+    localStorage.setItem(key, JSON.stringify({ ...(prev || {}), selected }));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function toggleSelected(deviceId: string): void {
+  const next = new Set(selectedIds.value);
+  const nowSelected = !next.has(deviceId);
+  if (nowSelected) next.add(deviceId);
+  else next.delete(deviceId);
+  selectedIds.value = next;
+  persistSelection(deviceId, nowSelected);
+}
 
 function setVideoRef(deviceId: string) {
   return (el: HTMLVideoElement | null) => {
@@ -365,9 +414,12 @@ function persistCameraConfig() {
   });
 }
 
+const selectedCameras = computed(() => cameras.value.filter((cam) => isSelected(cam.deviceId)));
+
 function onContinue() {
+  if (selectedCameras.value.length === 0) return;
   persistCameraConfig();
-  emit('continue', cameras.value);
+  emit('continue', selectedCameras.value);
 }
 
 function onClose() {
@@ -392,6 +444,7 @@ function onDisplayNameChange(cam: CameraConfig) {
     <div class="header-row">
       <div>
         <p class="lead">Select your connected cameras and verify their configuration.</p>
+        <p class="subtext">Uncheck any camera that isn't actually connected (a stale or ghost entry) or that you don't want IRIS to use.</p>
       </div>
       <button type="button" class="btn ghost" @click="toggleAllPreviews">
         {{ showAllPreviews ? 'Hide previews' : 'Show previews' }}
@@ -403,14 +456,22 @@ function onDisplayNameChange(cam: CameraConfig) {
       <div class="loader-text">Detecting cameras…</div>
     </div>
     <div v-else class="camera-list">
-      <div v-for="cam in cameras" :key="cam.deviceId" class="camera-card">
-        <button type="button" class="camera-summary" @click="toggleCameraExpansion(cam.deviceId)">
-          <div>
-            <div class="camera-title">{{ cam.label }}</div>
-              <div v-if="!expandedIds.has(cam.deviceId)" class="camera-meta">{{ cam.resolution }} · {{ cam.fps }} fps · {{ cam.rotation }}°</div>
-          </div>
+      <div v-for="cam in cameras" :key="cam.deviceId" class="camera-card" :class="{ deselected: !isSelected(cam.deviceId) }">
+        <div class="camera-summary">
+          <label class="select-toggle" @click.stop>
+            <input type="checkbox" :checked="isSelected(cam.deviceId)" @change="toggleSelected(cam.deviceId)" />
+          </label>
+          <button type="button" class="camera-summary-main" @click="toggleCameraExpansion(cam.deviceId)">
+            <div>
+              <div class="camera-title">{{ cam.label }}</div>
+              <div v-if="!expandedIds.has(cam.deviceId)" class="camera-meta">
+                {{ cam.resolution }} · {{ cam.fps }} fps · {{ cam.rotation }}°
+                <span v-if="!isSelected(cam.deviceId)"> · not used</span>
+              </div>
+            </div>
             <span class="arrow">{{ expandedIds.has(cam.deviceId) ? '▲' : '▼' }}</span>
-        </button>
+          </button>
+        </div>
 
         <div v-if="expandedIds.has(cam.deviceId)" class="camera-body">
           <div class="preview-panel">
@@ -464,7 +525,10 @@ function onDisplayNameChange(cam: CameraConfig) {
     </div>
 
     <template #footer>
-      <button type="button" class="btn primary" @click="onContinue">{{ editing ? 'Done' : 'Continue' }}</button>
+      <span v-if="!loading && selectedCameras.length === 0" class="footer-warning">Select at least one camera to continue.</span>
+      <button type="button" class="btn primary" :disabled="selectedCameras.length === 0" @click="onContinue">
+        {{ editing ? 'Done' : 'Continue' }}{{ selectedCameras.length > 0 ? ` (${selectedCameras.length} selected)` : '' }}
+      </button>
     </template>
   </AppModal>
 </template>
@@ -503,17 +567,45 @@ function onDisplayNameChange(cam: CameraConfig) {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: opacity 0.15s ease;
+}
+
+.camera-card.deselected {
+  opacity: 0.55;
 }
 
 .camera-summary {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 20px;
+}
+
+.select-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 8px;
+}
+
+.select-toggle input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #3b6fd9;
+}
+
+.camera-summary-main {
+  flex: 1;
+  min-width: 0;
   background: none;
   border: none;
   color: inherit;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 20px;
+  padding: 18px 20px 18px 4px;
   cursor: pointer;
   text-align: left;
 }
@@ -699,5 +791,20 @@ function onDisplayNameChange(cam: CameraConfig) {
 .btn.primary:hover,
 .btn.ghost:hover {
   background: #314a7c;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary:disabled:hover {
+  background: #3b6fd9;
+}
+
+.footer-warning {
+  align-self: center;
+  font-size: 12px;
+  color: #e0a951;
 }
 </style>
