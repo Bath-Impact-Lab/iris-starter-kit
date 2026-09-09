@@ -11,6 +11,8 @@ This project is intentionally minimal and not a commercial product. It exists as
 - `ws` for a small local WebSocket relay (main process → renderer)
 - WebCodecs (`VideoDecoder`) in the renderer to decode IRIS's live H.264 video output onto `<canvas>`, no video/streaming framework
 
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full file-by-file map, a data-flow diagram of the two `iris_cli` processes, and an IRIS configuration reference (what's actually passed to `iris_cli run`, useful background if you're chasing performance/lag issues).
+
 ## Flow
 
 1. **Camera setup**: pick cameras, set resolution/FPS/rotation, see a live browser preview.
