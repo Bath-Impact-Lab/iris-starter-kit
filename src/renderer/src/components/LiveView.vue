@@ -5,7 +5,6 @@ import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import PoseScene3D from './PoseScene3D.vue';
 import CaptureAreaWorkspace from './CaptureAreaWorkspace.vue';
 import type { RoiState, SavedRoi } from '../../../shared/roi';
-import { segmentPath } from '../utils/roiGeometry';
 
 const props = defineProps<{
   cameras: CameraConfig[];
@@ -57,7 +56,6 @@ async function refreshRoi() {
   } catch (error) { if (!disposed) { roiState.value = null; roiError.value = String(error); } }
   finally { pollingRoi = false; }
 }
-function roiCamera(streamId: number) { return roiState.value?.cameras.find(c => c.streamId === streamId); }
 function getRoiFrame(streamId: number) {
   return hasStream(streamId) && Date.now() - (lastVideoFrame.get(streamId) ?? 0) < 3000 ? canvasElements.get(streamId) : undefined;
 }
@@ -209,10 +207,6 @@ onBeforeUnmount(() => {
             class="feed-video"
             :class="`rotate-${displayRotation(cam.rotation)}`"
           />
-          <svg v-if="hasStream(index) && roiCamera(index)" class="roi-overlay feed-video" :class="`rotate-${displayRotation(cam.rotation)}`"
-            :viewBox="`0 0 ${roiCamera(index)!.width} ${roiCamera(index)!.height}`" aria-label="Applied capture area">
-            <path :d="segmentPath(roiCamera(index)!.segments)" />
-          </svg>
           <div v-if="!hasStream(index)" class="feed-inner" :class="`rotate-${displayRotation(cam.rotation)}`">
             <span class="feed-label">Camera feed</span>
           </div>
@@ -401,8 +395,6 @@ onBeforeUnmount(() => {
   object-fit: contain;
   background: #0a0c10;
 }
-.roi-overlay { position: absolute; background: transparent; pointer-events: none; }
-.roi-overlay path { fill: none; stroke: #52d6ad; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .roi-button { padding: 9px 12px; background: #263650; color: #eef4ff; border: 1px solid #526784; border-radius: 5px; }
 
 .mocap-feed {

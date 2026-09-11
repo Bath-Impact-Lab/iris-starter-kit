@@ -31,6 +31,3 @@ export function suggestedRectangle(cameras: RoiCamera[], floor: number): Point2[
   const z = points.length ? points.reduce((sum, p) => sum + p[1], 0) / points.length : 0;
   return [[x - 1, z - 1], [x + 1, z - 1], [x + 1, z + 1], [x - 1, z + 1]];
 }
-export function segmentPath(segments: [number, number, number, number][]): string {
-  return segments.map(s => `M${s[0]},${s[1]}L${s[2]},${s[3]}`).join(' ');
-}
