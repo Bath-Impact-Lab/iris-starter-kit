@@ -106,8 +106,8 @@ function attachIrisDecoder(deviceId: string): void {
 }
 
 function setCanvasRef(deviceId: string) {
-  return (el: HTMLCanvasElement | null) => {
-    if (el) {
+  return (el: unknown) => {
+    if (el instanceof HTMLCanvasElement) {
       canvasElements.set(deviceId, el);
       attachIrisDecoder(deviceId);
     } else {
@@ -306,7 +306,8 @@ function toggleSelected(deviceId: string): void {
 }
 
 function setVideoRef(deviceId: string) {
-  return (el: HTMLVideoElement | null) => {
+  return (value: unknown) => {
+    const el = value instanceof HTMLVideoElement ? value : null;
     videoElements.value[deviceId] = el;
     if (el && activeStreams.value[deviceId]) {
       el.srcObject = activeStreams.value[deviceId];

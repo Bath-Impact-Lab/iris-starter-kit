@@ -78,11 +78,12 @@
       "appearance_threshold": 0.45,
       "cross_camera_unconfirmed_threshold": 0.55,
       "capture_volume": {
-        "min_camera_coverage": 1,
+        "enabled": false,
+        "min_camera_coverage": 2,
         "ground_z": 0.0,
         "cell_size": 0.1,
-        "erosion_margin": 0.0,
-        "max_search_extent": 0.5,
+        "erosion_margin": 0.2,
+        "max_search_extent": 10.0,
         "max_frames_outside": 30
       },
       "kalman": {

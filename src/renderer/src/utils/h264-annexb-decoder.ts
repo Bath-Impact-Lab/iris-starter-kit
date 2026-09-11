@@ -8,7 +8,7 @@ export type DecoderStatus = 'connecting' | 'streaming' | 'failed';
 export class H264AnnexBDecoder {
   private socket: WebSocket | null = null;
   private decoder: VideoDecoder | null = null;
-  private buffer = new Uint8Array(0);
+  private buffer: Uint8Array = new Uint8Array(0);
   private accessUnit: Uint8Array[] = [];
   private receivedKeyframe = false;
   private timestamp = 0;

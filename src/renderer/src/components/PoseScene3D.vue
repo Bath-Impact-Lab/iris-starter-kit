@@ -51,7 +51,7 @@ const jointGeometry = new THREE.SphereGeometry(JOINT_RADIUS, 16, 12);
 const jointMaterial = new THREE.MeshStandardMaterial({ color: 0x6b9fff, emissive: 0x0d1c3a, roughness: 0.4 });
 const boneMaterial = new THREE.MeshStandardMaterial({ color: 0x4a72c4, roughness: 0.5 });
 
-const joints = new Map<string, THREE.Mesh>();
+const joints = new Map<(typeof HALPE26_JOINT_NAMES)[number], THREE.Mesh>();
 const bones = new Map<string, THREE.Mesh>();
 const jointState = new Map<string, JointState>();
 
