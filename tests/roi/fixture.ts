@@ -11,14 +11,22 @@ const rotation=ref(0);
 (window as any).testRecalibrate=()=>state.value={...state.value,calibrationVersion:state.value.calibrationVersion+1,availability:'needs_review'};
 (window as any).testApplied=0;
 function response(edit:any){
- const polygon=edit.worldPolygon??[];
+ const polygon=edit.mode==='automatic'?[[-2,-8],[3,-8],[3,-2],[-2,-2]]:edit.worldPolygon??[];
  const worldSegments=polygon.map((p:any,i:number,all:any)=>[...p,...all[(i+1)%all.length]]);
  return {...state.value,mode:edit.mode,worldPolygon:polygon,worldSegments,source:null,availability:edit.mode==='off'?'inactive':'active',cameras:state.value.cameras.map((c:any)=>{
   const project=(x:number,z:number)=>[500+(x-c.position[0])*500/-z,300+1000/-z];
   return {...c,segments:worldSegments.map((s:any)=>[...project(s[0],s[1]),...project(s[2],s[3])])};
  })};
 }
-(window as any).irisStarter={roiPreview:async(edit:any)=>({ok:true,state:response(edit)}),roiApply:async(edit:any)=>{
+const positions:number[]=[],colors:number[]=[];
+for(let x=-3;x<=4;x+=.08)for(let z=-9;z<=1;z+=.08){positions.push(x,.02,z);colors.push(80+Math.round((x+3)*10),105,120);}
+for(let x=-3;x<=4;x+=.08)for(let y=0;y<3;y+=.08){positions.push(x,y,-9);colors.push(155,130,95);}
+(window as any).testSceneLoads=0;
+(window as any).irisStarter={roiScene:async(key:any)=>{
+ (window as any).testSceneLoads++;
+ if(key.calibrationVersion!==1)return {ok:false,error:'Scene is stale after recalibration'};
+ return {ok:true,scene:{...key,positions:new Float32Array(positions),colors:new Uint8Array(colors),originalPointCount:positions.length/3}};
+},roiPreview:async(edit:any)=>({ok:true,state:response(edit)}),roiApply:async(edit:any)=>{
  (window as any).testApplied++; (window as any).testLastEdit=edit; const next=response(edit);next.roiVersion++;return {ok:true,state:next};
 }};
 (window as any).testDisconnect=()=>state.value=null;

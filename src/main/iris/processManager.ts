@@ -9,6 +9,9 @@ import { IrisRunStore } from './runStore.js'
 import { writeTempConfigFile } from './utils.js'
 import { RoiClient } from './roiClient.js'
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
+import { Da3SceneSource } from './da3Scene.js'
+import type { SceneKey, Da3SceneReply } from '../../shared/roi'
 import type { RoiEdit, RoiOperation, RoiReply } from '../../shared/roi'
 
 // `run` and `monitor` are separate IRIS processes, not one sequential
@@ -147,6 +150,7 @@ export class ProcessManager {
   private readonly runStore?: IrisRunStore
   private streamSessionId: string | null = null
   private roiClient: RoiClient | null = null
+  private da3Scene: Da3SceneSource | null = null
   captureRotation = 0
 
   async roiRequest(operation: RoiOperation, edit?: RoiEdit): Promise<RoiReply> {
@@ -156,8 +160,24 @@ export class ProcessManager {
     try {
       const result = await client.request(operation, edit)
       if (this.roiClient !== client) return { ok: false, error: 'IRIS run changed; refresh capture area' }
+      if (operation !== 'roi.preview' && result.ok && result.state) this.da3Scene?.observe(result.state)
       return result
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  async roiScene(key: SceneKey): Promise<Da3SceneReply> {
+    const source = this.da3Scene
+    if (!source || key?.runId !== source.runId) return { ok: false, error: 'No DA3 scene for this run' }
+    try {
+      const current = await this.roiRequest('roi.get')
+      if (!current.ok || !current.state || current.state.calibrationVersion !== key.calibrationVersion) throw new Error('Calibration changed; refresh the scene')
+      const scene = await source.load(current.state)
+      const after = await this.roiRequest('roi.get')
+      if (this.da3Scene !== source || !after.ok || after.state?.calibrationVersion !== key.calibrationVersion) throw new Error('Calibration changed while loading the scene')
+      return { ok: true, scene }
+    } catch (error) {
+      return { ok: false, error: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'DA3 scene is not ready yet. Retry after calibration.' : String(error instanceof Error ? error.message : error) }
+    }
   }
 
   constructor(options: ProcessManagerOptions = {}) {
@@ -427,12 +447,17 @@ export class ProcessManager {
     console.log(`[iris:run:${sessionId}] step 1/3 done -- ${cliPath}`)
 
     console.log(`[iris:run:${sessionId}] step 2/3 -- writing pipeline spec (run_id, runtime, shared, pipeline incl. auto-calibration config)`)
-    const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
+    const config = buildConfigFromOptions(options)
+    const calibration = config.pipeline.triangulation.da3_startup_calibration
+    calibration.output_dir = path.join(calibration.output_dir, randomUUID()).replaceAll('\\', '/')
+    calibration.save_ply = 'scene.ply'
+    const { tmpDir, cfgPath } = this.createTempConfig(config)
     console.log(`[iris:run:${sessionId}] step 2/3 done -- ${cfgPath}`)
     this.roiClient?.close()
     const controlPipe = `\\\\.\\pipe\\iris_roi_${randomUUID()}`
     this.roiClient = new RoiClient(controlPipe, options.run_id ?? sessionId)
     const runRoiClient = this.roiClient
+    this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
     this.captureRotation = options.rotation ?? options.cameras?.[0]?.rotation ?? 0
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
@@ -454,13 +479,13 @@ export class ProcessManager {
 
     child.on('error', (error) => {
       runRoiClient.close()
-      if (this.roiClient === runRoiClient) this.roiClient = null
+      if (this.roiClient === runRoiClient) { this.roiClient = null; this.da3Scene = null }
       console.error(`[iris:run:${sessionId}] start failed`, error)
     })
 
     child.on('exit', (code, signal) => {
       runRoiClient.close()
-      if (this.roiClient === runRoiClient) this.roiClient = null
+      if (this.roiClient === runRoiClient) { this.roiClient = null; this.da3Scene = null }
       console.log(`[iris:run:${sessionId}] run process exited (code=${code}, signal=${signal})`)
     })
 
@@ -582,7 +607,7 @@ export class ProcessManager {
 
   async stop(sessionId: string) {
     const entry = this.workers.get(sessionId)
-    if (entry?.isRun && this.roiClient?.runId === sessionId) { this.roiClient.close(); this.roiClient = null }
+    if (entry?.isRun && this.roiClient?.runId === sessionId) { this.roiClient.close(); this.roiClient = null; this.da3Scene = null }
     if (!entry) {
       console.log(`[iris:${sessionId}] stop requested but no worker is running`)
       return { ok: false, error: 'not_found' }

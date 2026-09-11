@@ -2,12 +2,14 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { Point2, RoiCamera } from '../../../shared/roi';
+import type { Da3Scene, Point2, RoiCamera } from '../../../shared/roi';
 import { cameraRay, suggestedRectangle } from '../utils/roiGeometry';
 
 const props = defineProps<{
   cameras: RoiCamera[]; floor: number; vertices: Point2[]; closed: boolean;
   segments: [number, number, number, number][]; editable: boolean; calibrationKey: string;
+  pointCloud: Da3Scene | null; sceneOpacity: number; heightLimit: number | null;
+  coverageSegments: [number, number, number, number][];
 }>();
 const emit = defineEmits<{ begin: []; change: [vertices: Point2[]]; close: [] }>();
 const host = ref<HTMLElement>();
@@ -16,6 +18,7 @@ const failure = ref('');
 let renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.OrthographicCamera;
 let controls: OrbitControls, observer: ResizeObserver, animation = 0;
 let content: THREE.Group, handles: THREE.Object3D[] = [];
+let cloud: THREE.Points | undefined, coverageLines: THREE.LineSegments | undefined;
 let span = 8, dragging = -1;
 const raycaster = new THREE.Raycaster();
 const target = new THREE.Vector3();
@@ -23,7 +26,35 @@ function dispose(group: THREE.Object3D) {
   group.traverse((o: any) => { o.geometry?.dispose(); if (Array.isArray(o.material)) o.material.forEach((m: any) => m.dispose()); else o.material?.dispose(); });
 }
 function line(points: THREE.Vector3[], color: number) {
-  content.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color })));
+  const outline = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color, depthTest: false }));
+  outline.renderOrder = 3; content.add(outline);
+}
+function rebuildCloud() {
+  if (!scene) return;
+  if (cloud) { scene.remove(cloud); dispose(cloud); cloud = undefined; }
+  const data = props.pointCloud;
+  if (!data || `${data.runId}:${data.calibrationVersion}` !== props.calibrationKey) return;
+  const positions: number[] = [], colors: number[] = [], color = new THREE.Color();
+  for (let i = 0; i < data.positions.length; i += 3) {
+    const y = data.positions[i + 1];
+    if (props.heightLimit !== null && y > props.floor + props.heightLimit) continue;
+    positions.push(data.positions[i], y, data.positions[i + 2]);
+    color.setRGB(data.colors[i] / 255, data.colors[i + 1] / 255, data.colors[i + 2] / 255, THREE.SRGBColorSpace);
+    colors.push(color.r, color.g, color.b);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  cloud = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: props.sceneOpacity, depthWrite: false }));
+  scene.add(cloud);
+}
+function rebuildCoverage() {
+  if (!scene) return;
+  if (coverageLines) { scene.remove(coverageLines); dispose(coverageLines); coverageLines = undefined; }
+  if (!props.coverageSegments.length) return;
+  const points = props.coverageSegments.flatMap(s => [floorPoint([s[0], s[1]]), floorPoint([s[2], s[3]])]);
+  coverageLines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineDashedMaterial({ color: 0x55cee8, dashSize: .12, gapSize: .08, depthTest: false, transparent: true, opacity: .8 }));
+  coverageLines.computeLineDistances(); coverageLines.renderOrder = 2; scene.add(coverageLines);
 }
 function floorPoint(p: Point2, offset = .015) { return new THREE.Vector3(p[0], props.floor + offset, p[1]); }
 function rebuild() {
@@ -58,7 +89,7 @@ function rebuild() {
       points.push(points[0].clone());
       const shape = new THREE.Shape(props.vertices.map(p => new THREE.Vector2(p[0], -p[1])));
       const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: 0x79aaff, transparent: true, opacity: .2, side: THREE.DoubleSide, depthWrite: false }));
-      mesh.rotation.x = -Math.PI / 2; mesh.position.y = props.floor + .02; content.add(mesh);
+      mesh.rotation.x = -Math.PI / 2; mesh.position.y = props.floor + .02; mesh.renderOrder = 2; mesh.material.depthTest = false; content.add(mesh);
     }
     line(points, 0xa5c8ff);
     props.vertices.forEach((p, index) => {
@@ -86,6 +117,7 @@ function fit() {
   const points: Point2[] = [...props.vertices, ...suggestedRectangle(props.cameras, props.floor)];
   props.cameras.forEach(c => { if (c.position?.every(Number.isFinite)) points.push([c.position[0], c.position[2]]); });
   props.segments.forEach(s => points.push([s[0], s[1]], [s[2], s[3]]));
+  props.coverageSegments.forEach(s => points.push([s[0], s[1]], [s[2], s[3]]));
   const xs = points.map(p => p[0]), zs = points.map(p => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
   const aspect = (host.value?.clientWidth ?? 1) / Math.max(host.value?.clientHeight ?? 1, 1);
@@ -115,6 +147,9 @@ function move(event: PointerEvent) {
 function up() { dragging = -1; }
 watch(() => [props.vertices, props.closed, props.segments, props.cameras, props.floor], rebuild, { deep: true });
 watch(() => props.calibrationKey, fit);
+watch(() => [props.pointCloud, props.heightLimit, props.floor, props.calibrationKey], rebuildCloud);
+watch(() => props.sceneOpacity, value => { if (cloud) (cloud.material as THREE.PointsMaterial).opacity = value; });
+watch(() => [props.coverageSegments, props.floor], rebuildCoverage);
 watch(orbit, view);
 onMounted(() => {
   try {
@@ -128,18 +163,18 @@ onMounted(() => {
     controls.minZoom = .1; controls.maxZoom = 30; controls.maxPolarAngle = Math.PI / 2 - .01;
     renderer.domElement.addEventListener('pointerdown', down); renderer.domElement.addEventListener('pointermove', move);
     renderer.domElement.addEventListener('pointerup', up); renderer.domElement.addEventListener('pointercancel', up);
-    observer = new ResizeObserver(resize); observer.observe(host.value!); fit();
+    observer = new ResizeObserver(resize); observer.observe(host.value!); fit(); rebuildCloud(); rebuildCoverage();
     const render = () => { animation = requestAnimationFrame(render); renderer.render(scene, camera); }; render();
   } catch { failure.value = 'The floor editor requires WebGL. Restart the app with graphics acceleration enabled.'; }
 });
-onBeforeUnmount(() => { cancelAnimationFrame(animation); observer?.disconnect(); controls?.dispose(); if (content) dispose(content); renderer?.dispose(); });
+onBeforeUnmount(() => { cancelAnimationFrame(animation); observer?.disconnect(); controls?.dispose(); if (content) dispose(content); if (cloud) dispose(cloud); if (coverageLines) dispose(coverageLines); renderer?.dispose(); });
 </script>
 
 <template>
   <div class="floor-scene">
     <div class="view-tools"><button :aria-pressed="!orbit" @click="orbit = false">Top down · Edit</button><button :aria-pressed="orbit" @click="orbit = true">Orbit · Inspect</button><button @click="fit">Fit area</button></div>
     <div ref="host" class="viewport" />
-    <p class="legend">{{ orbit ? 'Drag to orbit' : 'Click to draw · Drag corners' }} · Right-drag to pan · Scroll to zoom<br>Grid: 1 world unit · X right / −Z up in top view · Amber: camera frustums · Green: {{ segments.length ? 'area outline' : 'first corner' }}</p>
+    <p class="legend">{{ orbit ? 'Drag to orbit' : 'Click to draw · Drag corners' }} · Right-drag to pan · Scroll to zoom<br>Grid: 1 world unit · Amber: cameras · Cyan dashes: automatic coverage · Green: area outline / first corner</p>
     <p v-if="failure" class="failure" role="alert">{{ failure }}</p>
   </div>
 </template>

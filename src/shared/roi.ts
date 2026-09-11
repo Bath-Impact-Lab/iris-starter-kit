@@ -62,7 +62,15 @@ export interface RoiReply {
   saved?: SavedRoi | null;
 }
 export type RoiOperation = 'capabilities' | 'roi.get' | 'roi.preview' | 'roi.apply';
+export interface SceneKey { runId: string; calibrationVersion: number }
+export interface Da3Scene extends SceneKey {
+  positions: Float32Array;
+  colors: Uint8Array;
+  originalPointCount: number;
+}
+export interface Da3SceneReply { ok: boolean; scene?: Da3Scene; error?: string }
 export interface RoiApi {
+  roiScene: (key: SceneKey) => Promise<Da3SceneReply>;
   roiGet: () => Promise<RoiReply>;
   roiPreview: (edit: RoiEdit) => Promise<RoiReply>;
   roiApply: (edit: RoiEdit) => Promise<RoiReply>;

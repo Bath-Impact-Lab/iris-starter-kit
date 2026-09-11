@@ -44,6 +44,15 @@ function cameraIdsFromLastConfig(writeTempConfigFile: ReturnType<typeof vi.fn>):
 }
 
 describe('ProcessManager camera reconciliation', () => {
+  it('isolates DA3 output directories even when a run ID is reused', async () => {
+    const first = makeManager({}), second = makeManager({});
+    await first.manager.startRun({ run_id: 'same', cameras: twoConfiguredCameras });
+    await second.manager.startRun({ run_id: 'same', cameras: twoConfiguredCameras });
+    const a = first.writeTempConfigFile.mock.calls.at(-1)![0].pipeline.triangulation.da3_startup_calibration;
+    const b = second.writeTempConfigFile.mock.calls.at(-1)![0].pipeline.triangulation.da3_startup_calibration;
+    expect(a.output_dir).not.toBe(b.output_dir);
+    expect(a.save_ply).toBe('scene.ply');
+  });
   it('rejects a capture area draft belonging to another run before contacting core', async () => {
     const { manager } = makeManager({});
     await manager.startRun({ run_id: 'current', cameras: twoConfiguredCameras });

@@ -1,7 +1,7 @@
 import { ipcMain, BrowserWindow, app } from 'electron';
 import path from 'node:path';
 import { RoiStore } from './iris/roiStore.js';
-import type { RoiEdit } from '../shared/roi';
+import type { RoiEdit, SceneKey } from '../shared/roi';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -65,6 +65,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   const roiStore = new RoiStore(path.join(app.getPath('userData'), 'capture-area.json'));
   ipcMain.handle('roi:get', async () => ({ ...await processManager.roiRequest('roi.get'), saved: roiStore.load() }));
   ipcMain.handle('roi:preview', async (_event, edit: RoiEdit) => processManager.roiRequest('roi.preview', edit));
+  ipcMain.handle('roi:scene', async (_event, key: SceneKey) => processManager.roiScene(key));
   ipcMain.handle('roi:apply', async (_event, edit: RoiEdit) => {
     const result = await processManager.roiRequest('roi.apply', edit);
     if (result.ok && result.state) {
