@@ -121,7 +121,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="live">
     <div class="top-row">
-      <section class="pane mocap">
+      <section class="pane mocap" data-tour="live-mocap">
         <header class="pane-head">
           <span>Live mocap</span>
           <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} fps</span>
@@ -131,7 +131,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <aside class="pane settings-panel">
+      <aside class="pane settings-panel" data-tour="live-settings">
         <header class="pane-head">
           <span>Live settings</span>
         </header>

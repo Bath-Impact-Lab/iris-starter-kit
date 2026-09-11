@@ -455,8 +455,8 @@ function onDisplayNameChange(cam: CameraConfig) {
       <div class="spinner" aria-hidden="true"></div>
       <div class="loader-text">Detecting cameras…</div>
     </div>
-    <div v-else class="camera-list">
-      <div v-for="cam in cameras" :key="cam.deviceId" class="camera-card" :class="{ deselected: !isSelected(cam.deviceId) }">
+    <div v-else class="camera-list" data-tour="camera-list">
+      <div v-for="(cam, camIndex) in cameras" :key="cam.deviceId" class="camera-card" :class="{ deselected: !isSelected(cam.deviceId) }">
         <div class="camera-summary">
           <label class="select-toggle" @click.stop>
             <input type="checkbox" :checked="isSelected(cam.deviceId)" @change="toggleSelected(cam.deviceId)" />
@@ -493,7 +493,7 @@ function onDisplayNameChange(cam: CameraConfig) {
             <div class="preview-overlay">Live camera preview</div>
           </div>
 
-          <div class="config-grid">
+          <div class="config-grid" :data-tour="camIndex === 0 ? 'camera-config' : undefined">
             <label class="field field-full">
               <span>Display name</span>
               <input type="text" v-model="cam.label" @change="onDisplayNameChange(cam)" />
@@ -526,7 +526,7 @@ function onDisplayNameChange(cam: CameraConfig) {
 
     <template #footer>
       <span v-if="!loading && selectedCameras.length === 0" class="footer-warning">Select at least one camera to continue.</span>
-      <button type="button" class="btn primary" :disabled="selectedCameras.length === 0" @click="onContinue">
+      <button type="button" class="btn primary" data-tour="continue-setup" :disabled="selectedCameras.length === 0" @click="onContinue">
         {{ editing ? 'Done' : 'Continue' }}{{ selectedCameras.length > 0 ? ` (${selectedCameras.length} selected)` : '' }}
       </button>
     </template>
@@ -558,6 +558,9 @@ function onDisplayNameChange(cam: CameraConfig) {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
   gap: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .camera-card {
@@ -673,6 +676,7 @@ function onDisplayNameChange(cam: CameraConfig) {
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
+  max-height: 300px;
   background: #0d1118;
   border-radius: 10px;
   overflow: hidden;
