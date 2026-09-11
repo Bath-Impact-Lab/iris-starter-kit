@@ -65,6 +65,11 @@ defineEmits<{
 }
 
 .body {
+  /* Without flex/min-height, this never actually shrinks to fit -- content
+     just overflows past the panel's max-height and gets clipped by its
+     `overflow: hidden` instead of scrolling here. */
+  flex: 1;
+  min-height: 0;
   padding: 20px;
   overflow-y: auto;
   scrollbar-width: thin;

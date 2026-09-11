@@ -5,6 +5,8 @@ import { BODY_JOINT_COUNT, countValidKeypoints, extractBodyKeypoints2D } from '.
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
 import LiveView from './components/LiveView.vue';
+import TourOverlay from './components/TourOverlay.vue';
+import { useTour } from './tutorial/useTour';
 
 const phase = ref<AppPhase>('camera-setup');
 const cameras = ref<CameraConfig[]>([]);
@@ -13,6 +15,9 @@ const calibrationOpen = ref(false);
 // Bumped on each (re)start so CalibrationModal remounts instead of reusing a stale 'done' status.
 const calibrationSessionId = ref(0);
 const settingsOpen = ref(false);
+
+const tour = useTour();
+tour.syncToPhase(phase);
 
 const DEFAULT_MOCAP_SETTINGS: MocapViewSettings = {
   scale: 1.3,
@@ -86,6 +91,8 @@ onMounted(() => {
       console.log('[starter-kit] iris status:', status);
     });
   }
+
+  if (!tour.completed.value) tour.start();
 });
 
 onUnmounted(() => {
@@ -263,6 +270,13 @@ function reopenCalibration() {
   calibrationSessionId.value += 1; // always start a fresh attempt
   calibrationOpen.value = true;
 }
+
+function replayTour() {
+  settingsOpen.value = false;
+  // Reuse reopenSetup's behavior: reopens the modal without disturbing an already-running phase.
+  cameraSetupOpen.value = true;
+  tour.start();
+}
 </script>
 
 <template>
@@ -337,9 +351,12 @@ function reopenCalibration() {
         <h3>Settings</h3>
         <button type="button" class="btn" @click="reopenSetup">Camera setup</button>
         <button type="button" class="btn" @click="reopenCalibration">Re-calibrate</button>
+        <button type="button" class="btn" @click="replayTour">Take the tour</button>
         <button type="button" class="btn ghost" @click="settingsOpen = false">Close</button>
       </div>
     </div>
+
+    <TourOverlay />
   </div>
 </template>
 

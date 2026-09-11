@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template #footer>
-      <button type="button" class="btn primary" :disabled="status === 'running'" @click="onStart">
+      <button type="button" class="btn primary" data-tour="calibrate-button" :disabled="status === 'running'" @click="onStart">
         {{ status === 'done' ? 'Start capture' : 'Calibrate' }}
       </button>
     </template>
