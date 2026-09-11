@@ -1,4 +1,7 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, app } from 'electron';
+import path from 'node:path';
+import { RoiStore } from './iris/roiStore.js';
+import type { RoiEdit } from '../shared/roi';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -59,6 +62,17 @@ function emitStatusToAllWindows(processManager: ProcessManager) {
 }
 
 export function registerIpcHandlers(processManager: ProcessManager): void {
+  const roiStore = new RoiStore(path.join(app.getPath('userData'), 'capture-area.json'));
+  ipcMain.handle('roi:get', async () => ({ ...await processManager.roiRequest('roi.get'), saved: roiStore.load() }));
+  ipcMain.handle('roi:preview', async (_event, edit: RoiEdit) => processManager.roiRequest('roi.preview', edit));
+  ipcMain.handle('roi:apply', async (_event, edit: RoiEdit) => {
+    const result = await processManager.roiRequest('roi.apply', edit);
+    if (result.ok && result.state) {
+      try { roiStore.save(result.state, processManager.captureRotation); }
+      catch (error) { result.saveError = `Applied, but could not save: ${String(error)}`; }
+    }
+    return result;
+  });
   processManager.subscribe((status) => {
     emitStatusToAllWindows(processManager);
     console.log('[iris-dispatcher] status ->', status);
@@ -69,7 +83,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   ipcMain.handle('iris:get-status', () => processManager.getStatus());
 
   ipcMain.handle('iris:start-run', async (_event, input = {}) => {
-    const result = await processManager.startRun(input);
+    const result = await processManager.startRun({ ...input, roi_mode: roiStore.load()?.mode === 'automatic' ? 'automatic' : 'off' });
     return {
       ok: result.ok,
       runId: result.runId,

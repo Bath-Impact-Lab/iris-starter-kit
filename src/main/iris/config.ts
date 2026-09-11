@@ -173,6 +173,11 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   const outputDir = IRIS_CALIBRATION_DIR.replace(/\\/g, '/');
 
   const config = loadPipelineTemplate();
+  // Manual areas are reviewed after calibration; never replay old world coordinates.
+  if (options.roi_mode !== undefined) {
+    config.pipeline.global_reid_tracking.capture_volume.enabled = options.roi_mode === 'automatic';
+    delete config.pipeline.global_reid_tracking.capture_volume.polygon_xy_override;
+  }
 
   config.run_id = runId;
   config.runtime.buffers.camera_count = cameraCount;

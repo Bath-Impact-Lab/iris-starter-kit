@@ -7,6 +7,9 @@ import { createVideoPipeReader } from './videoPipeReader.js'
 import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
 import { IrisRunStore } from './runStore.js'
 import { writeTempConfigFile } from './utils.js'
+import { RoiClient } from './roiClient.js'
+import { randomUUID } from 'node:crypto'
+import type { RoiEdit, RoiOperation, RoiReply } from '../../shared/roi'
 
 // `run` and `monitor` are separate IRIS processes, not one sequential
 // chain. Marker strings below must match IRIS's log output exactly.
@@ -90,6 +93,7 @@ export interface IrisDispatcherStatus {
 }
 
 export interface StartIrisRunInput {
+  roi_mode?: 'off' | 'automatic'
   specFile?: string
   verbose?: boolean
   profileFile?: string
@@ -142,6 +146,19 @@ export class ProcessManager {
 
   private readonly runStore?: IrisRunStore
   private streamSessionId: string | null = null
+  private roiClient: RoiClient | null = null
+  captureRotation = 0
+
+  async roiRequest(operation: RoiOperation, edit?: RoiEdit): Promise<RoiReply> {
+    const client = this.roiClient
+    if (!client) return { ok: false, error: 'Start an IRIS run to configure its capture area' }
+    if (edit && edit.runId !== client.runId) return { ok: false, error: 'IRIS run changed; reopen capture area before applying' }
+    try {
+      const result = await client.request(operation, edit)
+      if (this.roiClient !== client) return { ok: false, error: 'IRIS run changed; refresh capture area' }
+      return result
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
 
   constructor(options: ProcessManagerOptions = {}) {
     const dependencies = options.dependencies ?? {}
@@ -266,6 +283,7 @@ export class ProcessManager {
       sessionId: runId,
       options: {
         run_id: runId,
+        roi_mode: input.roi_mode,
         camera_width: input.camera_width ?? 1920,
         camera_height: input.camera_height ?? 1080,
         video_fps: input.video_fps ?? 30,
@@ -411,9 +429,14 @@ export class ProcessManager {
     console.log(`[iris:run:${sessionId}] step 2/3 -- writing pipeline spec (run_id, runtime, shared, pipeline incl. auto-calibration config)`)
     const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
     console.log(`[iris:run:${sessionId}] step 2/3 done -- ${cfgPath}`)
+    this.roiClient?.close()
+    const controlPipe = `\\\\.\\pipe\\iris_roi_${randomUUID()}`
+    this.roiClient = new RoiClient(controlPipe, options.run_id ?? sessionId)
+    const runRoiClient = this.roiClient
+    this.captureRotation = options.rotation ?? options.cameras?.[0]?.rotation ?? 0
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
-    const child = this.spawnProcess(cliPath, ['run', cfgPath], {
+    const child = this.spawnProcess(cliPath, ['run', cfgPath, '--control-pipe', controlPipe], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -430,10 +453,14 @@ export class ProcessManager {
     })
 
     child.on('error', (error) => {
+      runRoiClient.close()
+      if (this.roiClient === runRoiClient) this.roiClient = null
       console.error(`[iris:run:${sessionId}] start failed`, error)
     })
 
     child.on('exit', (code, signal) => {
+      runRoiClient.close()
+      if (this.roiClient === runRoiClient) this.roiClient = null
       console.log(`[iris:run:${sessionId}] run process exited (code=${code}, signal=${signal})`)
     })
 
@@ -555,6 +582,7 @@ export class ProcessManager {
 
   async stop(sessionId: string) {
     const entry = this.workers.get(sessionId)
+    if (entry?.isRun && this.roiClient?.runId === sessionId) { this.roiClient.close(); this.roiClient = null }
     if (!entry) {
       console.log(`[iris:${sessionId}] stop requested but no worker is running`)
       return { ok: false, error: 'not_found' }

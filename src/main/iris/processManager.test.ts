@@ -44,6 +44,13 @@ function cameraIdsFromLastConfig(writeTempConfigFile: ReturnType<typeof vi.fn>):
 }
 
 describe('ProcessManager camera reconciliation', () => {
+  it('rejects a capture area draft belonging to another run before contacting core', async () => {
+    const { manager } = makeManager({});
+    await manager.startRun({ run_id: 'current', cameras: twoConfiguredCameras });
+    const reply = await manager.roiRequest('roi.apply', { runId: 'previous', mode: 'off', calibrationVersion: 1, roiVersion: 0 });
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain('run changed');
+  });
   it('passes the configured cameras through unchanged when IRIS reports the same count', async () => {
     const { manager, writeTempConfigFile } = makeManager({
       listCameras: async () => [

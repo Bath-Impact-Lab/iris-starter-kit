@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
 
 import type { CameraDevice, RunConfig } from './types';
+import type { RoiApi } from '../../shared/roi';
 
-interface IrisStarterApi {
+interface IrisStarterApi extends RoiApi {
   version: string;
   platform: string;
   listCameras: () => Promise<CameraDevice[]>;
