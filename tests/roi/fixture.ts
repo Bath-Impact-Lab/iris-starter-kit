@@ -13,10 +13,7 @@ const rotation=ref(0);
 function response(edit:any){
  const polygon=edit.mode==='automatic'?[[-2,-8],[3,-8],[3,-2],[-2,-2]]:edit.worldPolygon??[];
  const worldSegments=polygon.map((p:any,i:number,all:any)=>[...p,...all[(i+1)%all.length]]);
- return {...state.value,mode:edit.mode,worldPolygon:polygon,worldSegments,source:null,availability:edit.mode==='off'?'inactive':'active',cameras:state.value.cameras.map((c:any)=>{
-  const project=(x:number,z:number)=>[500+(x-c.position[0])*500/-z,300+1000/-z];
-  return {...c,segments:worldSegments.map((s:any)=>[...project(s[0],s[1]),...project(s[2],s[3])])};
- })};
+ return {...state.value,mode:edit.mode,worldPolygon:polygon,worldSegments,source:null,availability:edit.mode==='off'?'inactive':'active'};
 }
 const positions:number[]=[],colors:number[]=[];
 for(let x=-3;x<=4;x+=.08)for(let z=-9;z<=1;z+=.08){positions.push(x,.02,z);colors.push(80+Math.round((x+3)*10),105,120);}

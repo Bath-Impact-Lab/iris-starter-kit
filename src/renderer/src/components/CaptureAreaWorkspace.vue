@@ -119,7 +119,7 @@ onBeforeUnmount(() => { alive = false; serial++; sceneSequence++; coverageSequen
 <template>
   <section class="capture-workspace" aria-label="Capture area workspace">
     <header class="workspace-header">
-      <div><h2>Capture area</h2><p>Define a shared floor area for tracking. Check its projection in each camera before applying.</p></div>
+      <div><h2>Capture area</h2><p>Define a shared floor area for tracking using the reconstruction and calibrated camera positions.</p></div>
       <button :disabled="busy" @click="emit('close')">{{ dirty ? 'Discard draft / Back to live' : 'Back to live' }}</button>
     </header>
     <p v-if="error" role="alert" class="notice">{{ error }} <button @click="emit('refresh')">Retry</button></p>
@@ -160,7 +160,7 @@ onBeforeUnmount(() => { alive = false; serial++; sceneSequence++; coverageSequen
           <p v-if="showCoverage && coverageMessage" class="hint">{{ coverageMessage }}</p>
         </section>
         <h3>{{ preview && dirty && !stale ? 'Draft preview' : 'Applied area' }}</h3>
-        <p class="hint">Amber frustums show camera direction, not guaranteed visibility. Verify the floor boundary in these live views.</p>
+        <p class="hint">Amber frustums show camera direction, not guaranteed visibility. These unobstructed feeds provide visual context while drawing.</p>
         <section v-for="c in viewState?.cameras" :key="c.cameraId"><p>{{ c.label ?? 'Camera' }} · {{ c.cameraId + 1 }}</p>
           <CaptureCameraPreview :camera="c" :get-frame="getFrame" :rotation="rotationFor(c.streamId)" />
         </section>
