@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { RoiEdit, RoiReply } from '../shared/roi';
+import type { RoiEdit, RoiReply, SceneKey, Da3SceneReply } from '../shared/roi';
 
 type Resolution = '1280x720' | '1920x1080' | '2560x1440';
 
@@ -22,6 +22,7 @@ interface RunConfig {
 }
 
 const irisApi = {
+  roiScene: (key: SceneKey) => ipcRenderer.invoke('roi:scene', key) as Promise<Da3SceneReply>,
   roiGet: () => ipcRenderer.invoke('roi:get') as Promise<RoiReply>,
   roiPreview: (edit: RoiEdit) => ipcRenderer.invoke('roi:preview', edit) as Promise<RoiReply>,
   roiApply: (edit: RoiEdit) => ipcRenderer.invoke('roi:apply', edit) as Promise<RoiReply>,

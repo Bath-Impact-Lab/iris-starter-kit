@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import type { Point2, RoiEdit, RoiMode, RoiState, SavedRoi } from '../../../shared/roi';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import type { Da3Scene, Point2, RoiEdit, RoiMode, RoiState, SavedRoi } from '../../../shared/roi';
 import CaptureFloorScene from './CaptureFloorScene.vue';
 import CaptureCameraPreview from './CaptureCameraPreview.vue';
 import { suggestedRectangle } from '../utils/roiGeometry';
@@ -18,6 +18,39 @@ const editCalibration = ref(0), editVersion = ref(0), editRun = ref<string>();
 const history: Array<{ vertices: Point2[]; closed: boolean }> = [];
 let serial = 0, alive = true;
 let debounce: ReturnType<typeof setTimeout> | undefined;
+const scene = shallowRef<Da3Scene | null>(null);
+const sceneMessage = ref(''), sceneLoading = ref(false), showScene = ref(true), sceneOpacity = ref(.35);
+const floorSlice = ref(true), sliceHeight = ref(1.5), showCoverage = ref(true);
+const coverage = shallowRef<[number, number, number, number][]>([]);
+const coverageMessage = ref('');
+let sceneSequence = 0, coverageSequence = 0;
+const calibrationKey = computed(() => `${props.state?.runId}:${props.state?.calibrationVersion}`);
+async function loadScene() {
+  const state = props.state, sequence = ++sceneSequence;
+  scene.value = null; sceneMessage.value = ''; sceneLoading.value = false;
+  if (!state?.runId || !state.calibrationVersion) return;
+  if (!window.irisStarter.roiScene) { sceneMessage.value = 'Scene preview is unavailable in this app version.'; return; }
+  sceneLoading.value = true;
+  try {
+    const result = await window.irisStarter.roiScene({ runId: state.runId, calibrationVersion: state.calibrationVersion });
+    if (!alive || sequence !== sceneSequence) return;
+    if (result.ok && result.scene?.runId === state.runId && result.scene.calibrationVersion === state.calibrationVersion) scene.value = result.scene;
+    else sceneMessage.value = result.error ?? 'DA3 scene is unavailable';
+  } catch (error) { if (alive && sequence === sceneSequence) sceneMessage.value = String(error); }
+  finally { if (sequence === sceneSequence) sceneLoading.value = false; }
+}
+async function loadCoverage() {
+  const state = props.state, sequence = ++coverageSequence;
+  coverage.value = []; coverageMessage.value = '';
+  if (!state?.runId || !state.calibrationVersion) return;
+  try {
+    const result = await window.irisStarter.roiPreview({ runId: state.runId, mode: 'automatic', calibrationVersion: state.calibrationVersion, roiVersion: state.roiVersion });
+    if (!alive || sequence !== coverageSequence) return;
+    coverage.value = result.ok ? result.state?.worldSegments ?? [] : [];
+    coverageMessage.value = result.ok ? (coverage.value.length ? '' : 'No automatic camera overlap found.') : 'Automatic coverage preview unavailable.';
+  } catch { if (alive && sequence === coverageSequence) coverageMessage.value = 'Automatic coverage preview unavailable.'; }
+}
+watch(calibrationKey, () => { void loadScene(); void loadCoverage(); }, { immediate: true, flush: 'sync' });
 const stale = computed(() => props.state && (props.state.runId !== editRun.value || props.state.calibrationVersion !== editCalibration.value || props.state.roiVersion !== editVersion.value));
 const calibrated = computed(() => Boolean(props.state?.cameras.some(c => c.position && c.rotation && c.intrinsics)));
 const editable = computed(() => calibrated.value && mode.value === 'manual' && !stale.value && !busy.value);
@@ -80,7 +113,7 @@ function key(event: KeyboardEvent) {
   if (editable.value && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { undo(); event.preventDefault(); }
 }
 window.addEventListener('keydown', key);
-onBeforeUnmount(() => { alive = false; serial++; clearTimeout(debounce); window.removeEventListener('keydown', key); });
+onBeforeUnmount(() => { alive = false; serial++; sceneSequence++; coverageSequence++; clearTimeout(debounce); window.removeEventListener('keydown', key); });
 </script>
 
 <template>
@@ -108,9 +141,25 @@ onBeforeUnmount(() => { alive = false; serial++; clearTimeout(debounce); window.
     <p v-if="saved?.mode === 'manual' && state?.mode !== 'manual'" class="notice">{{ canRestore ? 'A saved area is available for this calibration.' : 'The saved area belongs to another coordinate frame. Draw a new area after recalibration.' }} <button v-if="canRestore" :disabled="!state || busy || !!stale" @click="restore">Load saved draft</button></p>
     <div class="workspace-body">
       <CaptureFloorScene :cameras="state?.cameras ?? []" :floor="state?.floorHeight ?? 0" :vertices="mode === 'manual' && !stale ? vertices : []"
-        :closed="closed" :editable="editable" :segments="viewState?.worldSegments ?? []" :calibration-key="`${state?.runId}:${state?.calibrationVersion}`"
+        :closed="closed" :editable="editable" :segments="viewState?.worldSegments ?? []" :calibration-key="calibrationKey"
+        :point-cloud="showScene ? scene : null" :scene-opacity="sceneOpacity" :height-limit="floorSlice ? sliceHeight : null" :coverage-segments="showCoverage ? coverage : []"
         @begin="begin" @change="vertices = $event" @close="closed = true" />
-      <aside class="verification"><h3>{{ preview && dirty && !stale ? 'Draft preview' : 'Applied area' }}</h3>
+      <aside class="verification">
+        <section class="scene-controls" aria-label="Scene layers">
+          <h3>Scene reference</h3>
+          <label><input type="checkbox" v-model="showScene" :disabled="!scene"> DA3 reconstruction</label>
+          <template v-if="scene">
+            <label>Opacity <input aria-label="Scene opacity" type="range" v-model.number="sceneOpacity" min="0.05" max="0.8" step="0.05" :disabled="!showScene"></label>
+            <label><input type="checkbox" v-model="floorSlice" :disabled="!showScene"> Hide points above floor slice</label>
+            <label v-if="floorSlice">Height {{ sliceHeight.toFixed(1) }} units <input aria-label="Scene slice height" type="range" v-model.number="sliceHeight" min="0.1" max="5" step="0.1" :disabled="!showScene"></label>
+            <p class="hint">{{ (scene.positions.length / 3).toLocaleString() }} reference points. Reconstruction is approximate; verify placement in the live views.</p>
+          </template>
+          <p v-if="sceneLoading || sceneMessage" class="hint" role="status">{{ sceneLoading ? 'Loading reconstructed scene…' : sceneMessage }}</p>
+          <button v-if="sceneMessage" :disabled="sceneLoading || !state?.calibrationVersion" @click="loadScene">Retry scene</button>
+          <label><input type="checkbox" v-model="showCoverage"> Automatic coverage outline</label>
+          <p v-if="showCoverage && coverageMessage" class="hint">{{ coverageMessage }}</p>
+        </section>
+        <h3>{{ preview && dirty && !stale ? 'Draft preview' : 'Applied area' }}</h3>
         <p class="hint">Amber frustums show camera direction, not guaranteed visibility. Verify the floor boundary in these live views.</p>
         <section v-for="c in viewState?.cameras" :key="c.cameraId"><p>{{ c.label ?? 'Camera' }} · {{ c.cameraId + 1 }}</p>
           <CaptureCameraPreview :camera="c" :get-frame="getFrame" :rotation="rotationFor(c.streamId)" />
@@ -132,6 +181,9 @@ h2, h3, p { margin: 0; } h2 { font-size: 21px; margin-bottom: 6px; } h3 { font-s
 .workspace-body { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 14px; flex: 1; min-height: 520px; }
 .verification { overflow-y: auto; max-height: 650px; display: flex; flex-direction: column; gap: 12px; }
 .verification section > p { font-size: 13px; margin: 0 0 7px; }
+.scene-controls { display: flex; flex-direction: column; gap: 9px; background: #172335; padding: 12px; border-radius: 8px; }
+.scene-controls label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.scene-controls input[type=range] { width: 100px; flex: 1; min-width: 60px; }
 .notice { padding: 10px 12px; border: 1px solid #576486; border-radius: 6px; background: #202a3c; font-size: 13px; }
 button, select { background: #253044; border: 1px solid #536078; color: #eef4ff; border-radius: 5px; padding: 8px 12px; cursor: pointer; }
 button:disabled, select:disabled { opacity: .45; cursor: default; }
