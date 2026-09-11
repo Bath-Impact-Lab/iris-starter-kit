@@ -124,10 +124,10 @@ but this is the shared code both repos run).
 |---|---|---|
 | `run_id` | `options.run_id`, generated per run | |
 | `runtime.buffers.camera_count` | `Math.max(1, cameraIds.length)` | |
-| `runtime.buffers.camera_width` / `camera_height` | `options.camera_width` / `camera_height` | **⚠️ `App.vue`'s `startIrisRun()` hardcodes these to `1920`/`1080` on every run, regardless of whatever resolution `CameraSetupModal` actually configured per camera.** The per-camera `resolution` string the UI collects is sent along in the `cameras` array but never parsed into width/height for `run`. If someone tries to reduce load by picking a lower resolution in Camera Setup, it currently has **zero effect** - `run` always captures at 1920x1080. |
+| `runtime.buffers.camera_width` / `camera_height` | `options.camera_width` / `camera_height` | Fixed 2026-09-11: `startIrisRun()` in `App.vue` now parses `config[0].resolution` ("WxH") into numeric width/height before sending, instead of hardcoding `1920`/`1080`. `config.ts` never parses the `resolution` string itself - the split has to happen in `App.vue` before the payload is built. |
 | `shared.camera_groups.capture_rig.camera_ids` | `cameras.map(cam => cam.id)`, numeric only - non-numeric ids (e.g. real browser `deviceId` strings) fall back to array index | This is intentional (see the virtual-camera reconciliation fix), not a bug. |
 | `shared.camera_groups.capture_rig.rotate` | `options.rotation ?? cameras[0].rotation ?? 0` | Rig-wide - only camera 0's rotation is ever sent, matching how IRIS's `capture_rig` itself models rotation (confirmed against `gpu_uploader.cpp`), not a per-camera bug. |
-| `shared.camera_groups.capture_rig.fps` | `options.video_fps ?? cameras[0].fps ?? 30` | **Same hardcoding issue as resolution** - `startIrisRun()` always passes `video_fps: 30` explicitly, so `cameras[0].fps` is never actually consulted. |
+| `shared.camera_groups.capture_rig.fps` | `options.video_fps ?? cameras[0].fps ?? 30` | Fixed 2026-09-11: `startIrisRun()` now sends `config[0].fps` instead of hardcoding `30`. |
 | `shared.models.*.{engine,yolox_engine_path,osnet_x05.engine_path}` | `IRIS_MODEL_DIR` (env override or `<IRIS_HOME>/models`) | Fixed TensorRT engine paths, not tunable per run. |
 | `pipeline.triangulation.da3_startup_calibration.output_dir` | `IRIS_CALIBRATION_DIR` (`%APPDATA%/ReCapture/auto_calibration`) | |
 

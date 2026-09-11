@@ -108,12 +108,15 @@ async function startIrisRun(config: CameraConfig[]) {
 
   bakedRotation.value = config[0]?.rotation ?? 0;
 
+  // Resolution/fps are rig-wide (matches rotation), so only camera 0's values apply.
+  const [width, height] = (config[0]?.resolution ?? '1920x1080').split('x').map(Number);
+
   try {
     const payload = {
       run_id: `starter-${Date.now()}`,
-      camera_width: 1920,
-      camera_height: 1080,
-      video_fps: 30,
+      camera_width: width,
+      camera_height: height,
+      video_fps: config[0]?.fps ?? 30,
       cameras: config.map((cam) => ({
         id: cam.deviceId,
         label: cam.label,
