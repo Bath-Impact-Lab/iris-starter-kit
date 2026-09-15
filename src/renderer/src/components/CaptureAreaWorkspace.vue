@@ -19,8 +19,7 @@ const history: Array<{ vertices: Point2[]; closed: boolean }> = [];
 let serial = 0, alive = true;
 let debounce: ReturnType<typeof setTimeout> | undefined;
 const scene = shallowRef<Da3Scene | null>(null);
-const sceneMessage = ref(''), sceneLoading = ref(false), showScene = ref(true), sceneOpacity = ref(.35);
-const floorSlice = ref(true), sliceHeight = ref(1.5), showCoverage = ref(true);
+const sceneMessage = ref(''), sceneLoading = ref(false), showScene = ref(true), showCoverage = ref(true);
 const coverage = shallowRef<[number, number, number, number][]>([]);
 const coverageMessage = ref('');
 let sceneSequence = 0, coverageSequence = 0;
@@ -142,18 +141,13 @@ onBeforeUnmount(() => { alive = false; serial++; sceneSequence++; coverageSequen
     <div class="workspace-body">
       <CaptureFloorScene :cameras="state?.cameras ?? []" :floor="state?.floorHeight ?? 0" :vertices="mode === 'manual' && !stale ? vertices : []"
         :closed="closed" :editable="editable" :segments="viewState?.worldSegments ?? []" :calibration-key="calibrationKey"
-        :point-cloud="showScene ? scene : null" :scene-opacity="sceneOpacity" :height-limit="floorSlice ? sliceHeight : null" :coverage-segments="showCoverage ? coverage : []"
+        :point-cloud="showScene ? scene : null" :scene-opacity=".35" :height-limit="1.5" :coverage-segments="showCoverage ? coverage : []"
         @begin="begin" @change="vertices = $event" @close="closed = true" />
       <aside class="verification">
-        <section class="scene-controls" aria-label="Scene layers">
+        <section class="scene-controls" aria-label="Scene reference">
           <h3>Scene reference</h3>
           <label><input type="checkbox" v-model="showScene" :disabled="!scene"> DA3 reconstruction</label>
-          <template v-if="scene">
-            <label>Opacity <input aria-label="Scene opacity" type="range" v-model.number="sceneOpacity" min="0.05" max="0.8" step="0.05" :disabled="!showScene"></label>
-            <label><input type="checkbox" v-model="floorSlice" :disabled="!showScene"> Hide points above floor slice</label>
-            <label v-if="floorSlice">Height {{ sliceHeight.toFixed(1) }} units <input aria-label="Scene slice height" type="range" v-model.number="sliceHeight" min="0.1" max="5" step="0.1" :disabled="!showScene"></label>
-            <p class="hint">{{ (scene.positions.length / 3).toLocaleString() }} reference points. Reconstruction is approximate; verify placement in the live views.</p>
-          </template>
+          <p v-if="scene" class="hint">The floor-level reconstruction is a visual reference. Verify placement in the live views.</p>
           <p v-if="sceneLoading || sceneMessage" class="hint" role="status">{{ sceneLoading ? 'Loading reconstructed scene…' : sceneMessage }}</p>
           <button v-if="sceneMessage" :disabled="sceneLoading || !state?.calibrationVersion" @click="loadScene">Retry scene</button>
           <label><input type="checkbox" v-model="showCoverage"> Automatic coverage outline</label>
@@ -183,7 +177,6 @@ h2, h3, p { margin: 0; } h2 { font-size: 21px; margin-bottom: 6px; } h3 { font-s
 .verification section > p { font-size: 13px; margin: 0 0 7px; }
 .scene-controls { display: flex; flex-direction: column; gap: 9px; background: #172335; padding: 12px; border-radius: 8px; }
 .scene-controls label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.scene-controls input[type=range] { width: 100px; flex: 1; min-width: 60px; }
 .notice { padding: 10px 12px; border: 1px solid #576486; border-radius: 6px; background: #202a3c; font-size: 13px; }
 button, select { background: #253044; border: 1px solid #536078; color: #eef4ff; border-radius: 5px; padding: 8px 12px; cursor: pointer; }
 button:disabled, select:disabled { opacity: .45; cursor: default; }
