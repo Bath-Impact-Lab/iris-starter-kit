@@ -78,7 +78,7 @@ const RIG_CALIBRATION_STEPS: TourStep[] = [
     id: 'rig-intro',
     phase: 'setup',
     title: 'ArUco rig calibration',
-    text: "This calibrates your cameras to real-world units using a printed marker, instead of DA3's automatic (but relative-scale-only) calibration. If it can't get a clean reading, it safely falls back to plain DA3 so calibration still completes.",
+    text: "This calibrates your cameras to real-world units using a printed marker, instead of the automatic (but relative-scale-only) calibration. If it can't get a clean reading, it safely falls back to standard auto-calibration so calibration still completes.",
   },
   {
     id: 'rig-howto',
@@ -126,7 +126,7 @@ const RIG_CALIBRATION_STEPS: TourStep[] = [
     id: 'rig-calibrating',
     phase: 'calibrating',
     title: 'Calibrating…',
-    text: 'Running ArUco detection, then falling back to plain DA3 if needed. Only takes a few seconds.',
+    text: 'Running ArUco detection, then falling back to standard auto-calibration if needed. Only takes a few seconds.',
   },
   {
     id: 'rig-done',

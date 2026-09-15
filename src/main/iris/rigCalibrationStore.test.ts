@@ -84,7 +84,7 @@ describe('RigCalibrationStore', () => {
     expect(store.readActive()).toBeNull();
   });
 
-  it('copies sibling intrinsics_cam<N>.json files alongside extrinsics.json (DA3 writes them into the same output dir)', () => {
+  it('copies sibling intrinsics_cam<N>.json files alongside extrinsics.json (reconstruction writes them into the same output dir)', () => {
     fs.writeFileSync(path.join(rootDir, 'intrinsics_cam0.json'), JSON.stringify({ K: [1] }));
     fs.writeFileSync(path.join(rootDir, 'intrinsics_cam1.json'), JSON.stringify({ K: [2] }));
     fs.writeFileSync(path.join(rootDir, 'report.json'), JSON.stringify({ note: 'not needed at runtime' }));

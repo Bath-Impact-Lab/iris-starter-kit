@@ -60,7 +60,7 @@ function buildArgs(mode: ArucoCalibrationMode, options: ArucoCalibrationOptions)
     args.push('--video', `${video.cameraId}:${video.path}`);
   }
 
-  // Both modes run DA3 reconstruction, so both take the DA3 engine.
+  // Both modes need the same reconstruction engine.
   args.push('--engine', options.da3EnginePath ?? defaultDa3EnginePath());
 
   if (mode === 'da3-aruco') {

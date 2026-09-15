@@ -12,7 +12,7 @@ The app never runs one `iris_cli` process end to end. It runs **two**,
 started independently by `ProcessManager` (`src/main/iris/processManager.ts`):
 
 - **`run`** (`iris_cli run <config.json>`) - the real pipeline: capture,
-  YOLOX detection, ReID tracking, RTMPose pose estimation, DA3 triangulation
+  YOLOX detection, ReID tracking, RTMPose pose estimation, triangulation
   (including startup auto-calibration), smoothing, output. Started once, at
   calibration, and stays alive through live view. This is the *only* process
   that reads the generated pipeline config.
@@ -53,7 +53,7 @@ flowchart TD
     Cfg -- "writes temp json" --> PM
     PM -- "spawn iris_cli run" --> Run
     Run -- writes --> SHM
-    Calib -. "polls run's stdout for DA3 milestones" .-> Run
+    Calib -. "polls run's stdout for calibration milestones" .-> Run
 
     PM -- "spawn iris_cli monitor" --> Mon
     Mon -- attaches --> SHM
@@ -87,7 +87,7 @@ view in place.
 | `ipc.ts` | The entire `window.irisStarter` IPC surface: camera enumeration (Windows PnP via PowerShell), `iris:start-run`, `iris:open/close-preview-monitor`, `iris:stop-all`. Thin - delegates everything to `ProcessManager`. |
 | `iris/processManager.ts` | The orchestrator described above: spawns/stops `run` and `monitor`, reconciles configured cameras against IRIS's own `show-cameras` list, wires named pipes into the relay servers, tracks dispatcher state (`idle/starting/running/previewing/stopping/failed`). |
 | `iris/config.ts` | `buildConfigFromOptions()` - merges `pipeline-template.json` with per-run values (camera ids/width/height/fps/rotation, resolved model paths, run id) into the JSON `iris_cli run` expects. Also resolves `IRIS_HOME`/model dir and queries `iris_cli show-cameras --json`. |
-| `iris/pipeline-template.json` | Static pipeline spec: stage wiring (capture → detection → reid tracking → pose → triangulation → output), model hyperparameters, DA3 calibration settings, Kalman/smoothing constants. Edit this to change pipeline *behavior*; `config.ts` only fills in per-run values. |
+| `iris/pipeline-template.json` | Static pipeline spec: stage wiring (capture → detection → reid tracking → pose → triangulation → output), model hyperparameters, auto-calibration settings, Kalman/smoothing constants. Edit this to change pipeline *behavior*; `config.ts` only fills in per-run values. |
 | `iris/resolveIrisExecutable.ts` | Finds `iris_cli.exe`: explicit env override → `IRIS_HOME` (env or registry, HKCU shadows HKLM) → bundled `resources/iris/bin/`. See `IRIS_BUNDLING.md`. |
 | `iris/pipeServer.ts` | Named-pipe server for pose data: newline-delimited JSON frames, parsed and handed to the IPC channel. |
 | `iris/videoPipeReader.ts` | Named-pipe server for raw video: parses IRIS's 40-byte binary frame header (magic `"IRIS"`, camera id, frame index, timestamp, width/height, payload size) in front of each H.264 Annex-B chunk. Re-syncs on the magic number if the stream drifts. |
@@ -101,7 +101,7 @@ view in place.
 |---|---|
 | `App.vue` | Phase state machine, `window.irisStarter` calls (`startIrisRun`, `openIrisPreview`), config-diffing on re-entry to Setup (`diffCameras`), live pose-frame FPS counter, mocap view settings (scale/bone-thickness) persisted to `localStorage`. |
 | `components/CameraSetupModal.vue` | Enumerates cameras (browser `navigator.mediaDevices` + Windows PnP fallback via IPC), lets the user select/deselect and configure per-camera resolution/fps/rotation and label, live preview. |
-| `components/CalibrationModal.vue` | Shows DA3 auto-calibration progress by watching `run`'s stdout milestones (`Waiting for startup DA3 calibration batch` → `Initialized live calibration from DA3 batch`). |
+| `components/CalibrationModal.vue` | Shows auto-calibration progress by watching `run`'s stdout milestones (`Waiting for startup DA3 calibration batch` → `Initialized live calibration from DA3 batch`, exact strings `run` prints). |
 | `components/LiveView.vue` | Per-camera video (prefers a direct second `getUserMedia()` grab over IRIS's re-encoded relay to cut latency, falls back to the IRIS decode path if a device is exclusive-access), rotation display math (`displayRotation` accounts for what IRIS already baked in vs. what CSS still needs to apply). |
 | `components/PoseScene3D.vue` | Three.js orbitable 3D skeleton view (spheres/capsules from `joint_centers`), replacing an earlier flat SVG stick figure. |
 | `components/AppModal.vue` | Generic modal shell used by the other modals. |

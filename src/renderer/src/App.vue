@@ -373,7 +373,7 @@ function replayTour() {
           type="button"
           class="btn"
           :disabled="phase !== 'live'"
-          :title="phase !== 'live' ? 'Finish camera setup and DA3 calibration first' : ''"
+          :title="phase !== 'live' ? 'Finish camera setup and calibration first' : ''"
           @click="openRigCalibration"
         >
           Rig calibration (ArUco marker)

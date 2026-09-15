@@ -72,9 +72,9 @@ export class RigCalibrationStore {
       if (INTRINSICS_FILE_PATTERN.test(file)) fs.rmSync(path.join(this.activeDir, file));
     }
 
-    // DA3 also writes intrinsics_cam<N>.json next to extrinsics.json.
-    // Triangulation needs both present together or it silently loads zero
-    // cameras, so copy them all over too.
+    // Reconstruction also writes intrinsics_cam<N>.json next to
+    // extrinsics.json. Triangulation needs both present together or it
+    // silently loads zero cameras, so copy them all over too.
     const sourceDir = path.dirname(input.extrinsicsSourcePath);
     const intrinsicsFiles = fs.existsSync(sourceDir)
       ? fs.readdirSync(sourceDir).filter((file) => INTRINSICS_FILE_PATTERN.test(file))

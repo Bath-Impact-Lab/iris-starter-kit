@@ -51,6 +51,8 @@ watch(step, (value) => {
 });
 
 const canStart = computed(() => props.cameras.length >= 2 && markerSizeMm.value > 0);
+// User-facing label for the internal mode value, never shown raw.
+const modeLabel = computed(() => (result.value?.mode === 'da3-aruco' ? 'ArUco-scaled' : 'Standard auto-calibration (relative scale)'));
 
 function getIrisApi(): any {
   return (window as any).irisStarter ?? null;
@@ -172,9 +174,9 @@ onBeforeUnmount(() => {
     <div v-if="step === 'setup'" class="section">
       <p class="lead">
         Print one ArUco marker (dictionary DICT_6X6_250) at a precisely known size. This replaces
-        live DA3 auto-calibration with a calibration scaled to real-world units from the marker;
-        if it can't get a good enough reading, it automatically falls back to plain DA3 so
-        calibration still completes.
+        live auto-calibration with a calibration scaled to real-world units from the marker;
+        if it can't get a good enough reading, it automatically falls back to standard
+        auto-calibration so calibration still completes.
       </p>
 
       <div class="howto" data-tour="rig-howto">
@@ -231,19 +233,19 @@ onBeforeUnmount(() => {
 
     <div v-else-if="step === 'calibrating'" class="section centered">
       <p class="lead">Running calibration…</p>
-      <p class="hint">Using da3-aruco. Note: falling back to plain DA3 if needed.</p>
+      <p class="hint">Analyzing the marker recording, falling back to standard auto-calibration if needed.</p>
     </div>
 
     <div v-else-if="step === 'ready'" class="section">
       <p class="success">
-        Calibration published ({{ result?.mode === 'da3-aruco' ? 'ArUco-scaled DA3' : 'DA3 fallback (relative scale)' }}).
+        Calibration published ({{ modeLabel }}).
       </p>
       <dl class="stats" data-tour="rig-stats">
         <dt>Mode</dt>
-        <dd>{{ result?.mode }}</dd>
+        <dd>{{ modeLabel }}</dd>
         <dt>Metric scale</dt>
         <dd>{{ result?.metricValid ? 'Yes' : 'No (relative scale only)' }}</dd>
-        <!-- da3 (the fallback) never sets this; showing its default 0.0 would look like a perfect fit. -->
+        <!-- The fallback mode never sets this; showing its default 0.0 would look like a perfect fit. -->
         <template v-if="result?.mode === 'da3-aruco' && result?.meanReprojectionErrorPx !== undefined">
           <dt>Mean reprojection error</dt>
           <dd>{{ result.meanReprojectionErrorPx.toFixed(2) }}px</dd>

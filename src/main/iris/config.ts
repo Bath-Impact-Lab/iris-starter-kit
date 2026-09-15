@@ -150,7 +150,7 @@ export function getIrisCliMissingMessage(): string {
 export const IRIS_MODEL_DIR = getIrisModelDir();
 export const IRIS_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'auto_calibration');
 // Where a published rig calibration lives (see rigCalibrationStore.ts).
-// Separate from IRIS_CALIBRATION_DIR, DA3's own per-run scratch output.
+// Separate from IRIS_CALIBRATION_DIR, the auto-calibration's own scratch output.
 export const RIG_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'rig_calibration');
 
 // Static pipeline settings live in pipeline-template.json. Only the values
@@ -201,7 +201,7 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   config.shared.models.reid.osnet_x05.engine_path = `${modelDir}/osnet_x05_fp16.trt`;
   config.shared.models.pose.rtmpose_people.engine = `${modelDir}/rtmpose_bs16_fp16.trt`;
 
-  // A published calibration replaces live DA3 auto-calibration: triangulation
+  // A published calibration replaces live auto-calibration: triangulation
   // reads a fixed extrinsics file instead of estimating poses each run.
   const extrinsicsFile: string | undefined = options.extrinsics_file;
   if (extrinsicsFile) {

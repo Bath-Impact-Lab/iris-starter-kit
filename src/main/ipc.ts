@@ -83,7 +83,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
 
   ipcMain.handle('iris:start-run', async (_event, input = {}) => {
     // A published calibration for this exact camera setup takes over from
-    // live DA3 auto-calibration. Otherwise falls back to today's behavior.
+    // live auto-calibration. Otherwise falls back to today's behavior.
     const extrinsicsFile = rigCalibration.resolveExtrinsicsFile(cameraFingerprintFor(input));
     const result = await processManager.startRun({
       ...input,
