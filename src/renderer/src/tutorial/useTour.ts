@@ -1,44 +1,49 @@
 import { computed, ref, watch, type Ref } from 'vue';
-import type { AppPhase } from '../types';
 import { HAPPY_PATH_TOUR } from './steps';
+import type { TourDefinition } from './types';
 
-const STORAGE_KEY = 'starter-kit-tour-completed';
+function storageKey(tourId: string): string {
+  return tourId === HAPPY_PATH_TOUR.id ? 'starter-kit-tour-completed' : `starter-kit-tour-completed:${tourId}`;
+}
 
-function loadCompleted(): boolean {
+function loadCompleted(tourId: string): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY) === '1';
+    return localStorage.getItem(storageKey(tourId)) === '1';
   } catch {
     return false;
   }
 }
 
-function saveCompleted(): void {
+function saveCompleted(tourId: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY, '1');
+    localStorage.setItem(storageKey(tourId), '1');
   } catch {
     // ignore storage failures
   }
 }
 
-// Module-level (singleton) state -- there's only ever one tour running in this
-// single-window app, matching the rest of the app's plain-ref state (no store lib).
+// Module-level singleton: only one tour runs at a time. Starting one
+// switches `activeTour`.
+const activeTour = ref<TourDefinition>(HAPPY_PATH_TOUR);
 const active = ref(false);
 const stepIndex = ref(0);
-const completed = ref(loadCompleted());
+const completed = ref(loadCompleted(HAPPY_PATH_TOUR.id));
 
-const currentStep = computed(() => (active.value ? HAPPY_PATH_TOUR[stepIndex.value] ?? null : null));
-const isLastStep = computed(() => stepIndex.value >= HAPPY_PATH_TOUR.length - 1);
-const stepLabel = computed(() => `${stepIndex.value + 1} / ${HAPPY_PATH_TOUR.length}`);
+const currentStep = computed(() => (active.value ? activeTour.value.steps[stepIndex.value] ?? null : null));
+const isLastStep = computed(() => stepIndex.value >= activeTour.value.steps.length - 1);
+const stepLabel = computed(() => `${stepIndex.value + 1} / ${activeTour.value.steps.length}`);
 
-function start(): void {
+function start(tour: TourDefinition = HAPPY_PATH_TOUR): void {
+  activeTour.value = tour;
   stepIndex.value = 0;
   active.value = true;
+  completed.value = loadCompleted(tour.id);
 }
 
 function end(): void {
   active.value = false;
   completed.value = true;
-  saveCompleted();
+  saveCompleted(activeTour.value.id);
 }
 
 function next(): void {
@@ -57,17 +62,33 @@ function skip(): void {
   end();
 }
 
-// Jump to the first step belonging to a phase whenever the app enters it, so the
-// tour tracks the app's own phase transitions instead of the user having to
-// click through phases blind (e.g. calibration finishing on its own).
-function syncToPhase(phase: Ref<AppPhase>): void {
+function hasCompletedTour(tourId: string): boolean {
+  return loadCompleted(tourId);
+}
+
+// Jumps to the first step matching a phase/state whenever it's entered.
+// Generic so it works for AppPhase or a modal's own step union.
+function syncToPhase<T extends string>(phase: Ref<T>): void {
   watch(phase, (newPhase) => {
     if (!active.value) return;
-    const firstIndexForPhase = HAPPY_PATH_TOUR.findIndex((step) => step.phase === newPhase);
+    const firstIndexForPhase = activeTour.value.steps.findIndex((step) => step.phase === newPhase);
     if (firstIndexForPhase >= 0) stepIndex.value = firstIndexForPhase;
   });
 }
 
 export function useTour() {
-  return { active, currentStep, stepIndex, stepLabel, isLastStep, completed, start, next, back, skip, syncToPhase };
+  return {
+    active,
+    currentStep,
+    stepIndex,
+    stepLabel,
+    isLastStep,
+    completed,
+    start,
+    next,
+    back,
+    skip,
+    syncToPhase,
+    hasCompletedTour,
+  };
 }

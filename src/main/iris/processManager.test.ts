@@ -9,11 +9,16 @@ function fakeChild() {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 1234;
+  child.stdin = { writable: true, write: vi.fn() };
+  child.kill = vi.fn((signal: string) => {
+    child.emit('exit', null, signal);
+  });
   return child;
 }
 
 function makeManager(overrides: {
   listCameras?: (cliPath: string) => Promise<IrisCameraDevice[] | null>;
+  spawnProcess?: (command: string, args: string[]) => any;
 }) {
   const writeTempConfigFile = vi.fn((config: Record<string, any>) => ({
     tmpDir: 'C:\\fake\\tmp',
@@ -22,11 +27,14 @@ function makeManager(overrides: {
 
   const manager = new ProcessManager({
     dependencies: {
-      spawnProcess: () => fakeChild(),
+      spawnProcess: overrides.spawnProcess ?? (() => fakeChild()),
       pathExists: () => true,
       getExecutablePath: () => 'C:\\fake\\iris_cli.exe',
       writeTempConfigFile,
       listCameras: overrides.listCameras ?? (async () => null),
+      createPipeServer: async () => ({ close: () => {} }) as any,
+      createVideoPipeReader: async () => ({ close: () => {} }) as any,
+      videoRelayServer: { start: async () => [], stop: async () => {}, push: () => {} } as any,
     },
   });
 
@@ -90,5 +98,77 @@ describe('ProcessManager camera reconciliation', () => {
     await manager.startRun({ cameras: [] });
 
     expect(listCameras).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProcessManager monitor recording', () => {
+  it('does not pass --output-dir to iris_cli monitor for an ordinary live preview', async () => {
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => fakeChild());
+    const { manager } = makeManager({ spawnProcess });
+
+    await manager.openPreviewMonitor({ cameraCount: 2 });
+
+    const args = spawnProcess.mock.calls[0]?.[1] as string[];
+    expect(args).not.toContain('--output-dir');
+  });
+
+  it('passes --output-dir to iris_cli monitor when explicitly recording for rig calibration', async () => {
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => fakeChild());
+    const { manager } = makeManager({ spawnProcess });
+
+    await manager.openPreviewMonitor({ cameraCount: 2, outputDirectory: 'C:\\calib\\capture-1' });
+
+    const args = spawnProcess.mock.calls[0]?.[1] as string[];
+    const flagIndex = args.indexOf('--output-dir');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(args[flagIndex + 1]).toBe('C:\\calib\\capture-1');
+  });
+});
+
+describe('ProcessManager graceful monitor shutdown', () => {
+  // Killing the process outright (SIGTERM is a hard kill on Windows)
+  // leaves recording_cam<N>.mp4 corrupt. This covers the graceful path.
+  it('writes "stop\\n" to a monitor session\'s stdin instead of killing it outright', async () => {
+    const child = fakeChild();
+    const spawnProcess = vi.fn(() => child);
+    const { manager } = makeManager({ spawnProcess });
+
+    await manager.openPreviewMonitor({ cameraCount: 1, outputDirectory: 'C:\\calib\\capture-1' });
+    const closePromise = manager.closePreviewMonitor();
+
+    // stdin.write happens synchronously, before the await suspends.
+    expect(child.stdin.write).toHaveBeenCalledWith('stop\n');
+    expect(child.kill).not.toHaveBeenCalled();
+
+    child.emit('exit', null, 'SIGTERM');
+    await closePromise;
+  });
+
+  it('escalates to SIGTERM then SIGKILL if the monitor does not exit after "stop\\n"', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeChild();
+      // Simulate a monitor that ignores stop\n and never exits on its own.
+      child.kill = vi.fn();
+      const spawnProcess = vi.fn(() => child);
+      const { manager } = makeManager({ spawnProcess });
+
+      await manager.openPreviewMonitor({ cameraCount: 1, outputDirectory: 'C:\\calib\\capture-1' });
+      const closePromise = manager.closePreviewMonitor();
+
+      expect(child.stdin.write).toHaveBeenCalledWith('stop\n');
+      expect(child.kill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+
+      child.emit('exit', null, 'SIGKILL');
+      await closePromise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

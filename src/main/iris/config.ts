@@ -149,12 +149,21 @@ export function getIrisCliMissingMessage(): string {
 
 export const IRIS_MODEL_DIR = getIrisModelDir();
 export const IRIS_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'auto_calibration');
+// Where a published rig calibration lives (see rigCalibrationStore.ts).
+// Separate from IRIS_CALIBRATION_DIR, DA3's own per-run scratch output.
+export const RIG_CALIBRATION_DIR = path.join(getAppDataPath(), 'ReCapture', 'rig_calibration');
 
 // Static pipeline settings live in pipeline-template.json. Only the values
 // that vary per run or per machine are filled in here. See
 // IRIS_BUNDLING.md for how to customize the spec.
 function loadPipelineTemplate(): Record<string, any> {
   return JSON.parse(fs.readFileSync(PIPELINE_TEMPLATE_PATH, 'utf8'));
+}
+
+// Same rule buildConfigFromOptions uses for rotation, shared so a rig
+// calibration fingerprint can't drift from what actually reaches iris_cli.
+export function resolveCaptureRotation(options: { rotation?: any; cameras?: Array<{ rotation?: number }> }): number {
+  return Number.isFinite(options.rotation) ? Number(options.rotation) : Number(options.cameras?.[0]?.rotation ?? 0);
 }
 
 export function buildConfigFromOptions(options: Record<string, any> = {}) {
@@ -167,7 +176,7 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
     return Number.isFinite(idValue) ? idValue : index;
   });
   const fps = Number.isFinite(options.video_fps) ? Number(options.video_fps) : (cameras[0]?.fps ?? 30);
-  const rotate = Number.isFinite(options.rotation) ? Number(options.rotation) : (cameras[0]?.rotation ?? 0);
+  const rotate = resolveCaptureRotation(options);
   const cameraCount = Math.max(1, cameraIds.length);
   const modelDir = IRIS_MODEL_DIR.replace(/\\/g, '/');
   const outputDir = IRIS_CALIBRATION_DIR.replace(/\\/g, '/');
@@ -192,10 +201,19 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   config.shared.models.reid.osnet_x05.engine_path = `${modelDir}/osnet_x05_fp16.trt`;
   config.shared.models.pose.rtmpose_people.engine = `${modelDir}/rtmpose_bs16_fp16.trt`;
 
-  Object.assign(config.pipeline.triangulation.da3_startup_calibration, {
-    engine: `${modelDir}/da3_base.trt`,
-    output_dir: outputDir,
-  });
+  // A published calibration replaces live DA3 auto-calibration: triangulation
+  // reads a fixed extrinsics file instead of estimating poses each run.
+  const extrinsicsFile: string | undefined = options.extrinsics_file;
+  if (extrinsicsFile) {
+    delete config.pipeline.triangulation.da3_startup_calibration;
+    config.pipeline.triangulation.calibration_dir = path.dirname(extrinsicsFile).replace(/\\/g, '/');
+    config.pipeline.triangulation.extrinsics_file = extrinsicsFile.replace(/\\/g, '/');
+  } else {
+    Object.assign(config.pipeline.triangulation.da3_startup_calibration, {
+      engine: `${modelDir}/da3_base.trt`,
+      output_dir: outputDir,
+    });
+  }
 
   return config;
 }

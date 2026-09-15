@@ -29,6 +29,18 @@ export interface MocapViewSettings {
   boneThickness: number;
 }
 
+// Mirrors src/main/iris/rigCalibrationCoordinator.ts's RigCalibrationStatus.
+export type RigCalibrationStage = 'idle' | 'recording' | 'calibrating' | 'publishing' | 'ready' | 'failed';
+
+export interface RigCalibrationStatus {
+  stage: RigCalibrationStage;
+  mode?: 'da3-aruco' | 'da3';
+  errorMessage?: string;
+  meanReprojectionErrorPx?: number;
+  metricValid?: boolean;
+  videoStreams?: VideoStreamDescriptor[];
+}
+
 // One tracked person's pose for a single frame.
 export interface PosePerson {
   person_id?: number;
