@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveIrisExecutable } from './resolveIrisExecutable.js';
+import { captureSettings, type NativeCamera } from '../../shared/capture';
 
 const execFileAsync = promisify(execFile);
 
@@ -90,11 +91,7 @@ export function getIrisCliPath(): string {
   });
 }
 
-export interface IrisCameraDevice {
-  index: number;
-  name: string;
-  devicePath?: string;
-}
+export type IrisCameraDevice = NativeCamera;
 
 // IRIS's own view of what cameras it can actually open (`iris_cli
 // show-cameras --json`), as opposed to the browser/OS device lists the
@@ -118,6 +115,11 @@ export async function listIrisCameras(cliPath: string): Promise<IrisCameraDevice
       index: Number(camera.index),
       name: String(camera.name ?? ''),
       devicePath: camera.device_path ? String(camera.device_path) : undefined,
+      modes: Array.isArray(camera.modes) ? camera.modes.map((mode: any) => ({
+        width: Number(mode.width), height: Number(mode.height),
+        fpsNumerator: Number(mode.fps_numerator), fpsDenominator: Number(mode.fps_denominator),
+        format: String(mode.format ?? ''),
+      })) : undefined,
     }));
   } catch (error) {
     console.warn('[iris:config] "iris_cli show-cameras" failed -- skipping camera reconciliation:', error);
@@ -168,14 +170,12 @@ export function resolveCaptureRotation(options: { rotation?: any; cameras?: Arra
 
 export function buildConfigFromOptions(options: Record<string, any> = {}) {
   const runId = options.run_id ?? `run-${Date.now()}`;
-  const width = Number(options.camera_width ?? 1920);
-  const height = Number(options.camera_height ?? 1080);
   const cameras = Array.isArray(options.cameras) ? options.cameras : [];
+  const { width, height, fps } = captureSettings(cameras, options);
   const cameraIds = cameras.map((camera: any, index: number) => {
     const idValue = Number(camera?.id ?? index);
     return Number.isFinite(idValue) ? idValue : index;
   });
-  const fps = Number.isFinite(options.video_fps) ? Number(options.video_fps) : (cameras[0]?.fps ?? 30);
   const rotate = resolveCaptureRotation(options);
   const cameraCount = Math.max(1, cameraIds.length);
   const modelDir = IRIS_MODEL_DIR.replace(/\\/g, '/');

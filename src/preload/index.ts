@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { RoiEdit, RoiReply, SceneKey, Da3SceneReply } from '../shared/roi';
+import type { NativeCamera } from '../shared/capture';
 
-type Resolution = '1280x720' | '1920x1080' | '2560x1440';
+type Resolution = `${number}x${number}`;
 
 interface CameraDevice {
   id: string;
@@ -29,6 +30,7 @@ const irisApi = {
   version: '0.1.0',
   platform: process.platform,
   listCameras: () => ipcRenderer.invoke('cameras:list') as Promise<CameraDevice[]>,
+  listCaptureCameras: () => ipcRenderer.invoke('cameras:capture') as Promise<NativeCamera[] | null>,
   saveRunConfig: (config: RunConfig) => ipcRenderer.invoke('run:save-config', config),
   startPoseStream: (options?: Record<string, any>) => ipcRenderer.invoke('run:start-stream', options),
   stopRun: (runId?: string) => ipcRenderer.invoke('run:stop', runId),

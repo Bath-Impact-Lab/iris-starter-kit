@@ -75,6 +75,8 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     runtime: createProcessManagerRigCalibrationRuntime(processManager),
   });
 
+  ipcMain.handle('cameras:capture', () => processManager.getCaptureCameras());
+
   const roiStore = new RoiStore(path.join(app.getPath('userData'), 'capture-area.json'));
   let savedRoi = roiStore.load();
   ipcMain.handle('roi:get', async () => ({ ...await processManager.roiRequest('roi.get'), saved: savedRoi }));

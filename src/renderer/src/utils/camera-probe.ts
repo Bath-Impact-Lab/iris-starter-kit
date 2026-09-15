@@ -1,5 +1,6 @@
 import type { CameraDevice, Resolution } from '../types';
-import { RESOLUTIONS, FPS_OPTIONS } from '../data/mock';
+import { RESOLUTIONS } from '../data/mock';
+import { usableModes, modeFps, sameFps, type NativeCamera } from '../../../shared/capture';
 
 function parseResolution(res: string): { w: number; h: number } {
   const [w, h] = res.split('x').map((v) => parseInt(v, 10));
@@ -7,18 +8,21 @@ function parseResolution(res: string): { w: number; h: number } {
 }
 
 export function getCommonResolutionOptions(devices: CameraDevice[]): Resolution[] {
-  const options = [...RESOLUTIONS] as Resolution[];
+  const native = devices.find(device => device.modes?.length);
+  const options = native ? [...new Set(usableModes(native.modes!).map(mode => `${mode.width}x${mode.height}` as Resolution))] : [...RESOLUTIONS];
   if (devices.length === 0) return options;
 
   return options
     .filter((resolution) => {
       const target = parseResolution(resolution);
       return devices.every((device) => {
-        if (!device.maxResolution) return false;
+        if (device.modes?.length) return usableModes(device.modes).some(mode => mode.width === target.w && mode.height === target.h);
+        if (!device.maxResolution) return true;
         const max = parseResolution(device.maxResolution);
         return target.w <= max.w && target.h <= max.h;
       });
     })
+    .filter(resolution => getCommonFpsOptions(devices, resolution).length > 0)
     .sort((a, b) => {
       const aSize = parseResolution(a).w * parseResolution(a).h;
       const bSize = parseResolution(b).w * parseResolution(b).h;
@@ -26,23 +30,42 @@ export function getCommonResolutionOptions(devices: CameraDevice[]): Resolution[
     });
 }
 
-export function getCommonFpsOptions(devices: CameraDevice[]): number[] {
-  const options = [...FPS_OPTIONS] as number[];
-  if (devices.length === 0) return options;
+export function getCommonFpsOptions(devices: CameraDevice[], resolution: Resolution = '1920x1080'): number[] {
+  const { w, h } = parseResolution(resolution);
+  const native = devices.find(device => device.modes?.length);
+  const options = native ? usableModes(native.modes!).filter(mode => mode.width === w && mode.height === h).map(modeFps) :
+    [15, 24, 25, 30, 50, 60, 90, 120, ...devices.flatMap(device => device.suggestedFps ? [device.suggestedFps] : [])];
 
   return options
-    .filter((value) => devices.every((device) => device.maxFps == null || value <= device.maxFps))
+    .filter((value, index, all) => all.findIndex(other => sameFps(value, other)) === index)
+    .filter((value) => devices.every((device) => device.modes?.length ? usableModes(device.modes).some(mode =>
+      mode.width === w && mode.height === h && sameFps(modeFps(mode), value)) :
+      (device.maxFps == null || value <= device.maxFps) && (device.minFps == null || value >= device.minFps)))
     .sort((a, b) => b - a);
 }
 
 export function selectCommonConfig(devices: CameraDevice[]) {
   const resolutionOptions = getCommonResolutionOptions(devices);
-  const fpsOptions = getCommonFpsOptions(devices);
+  const resolution = resolutionOptions.includes('1920x1080') ? '1920x1080' : resolutionOptions[0];
+  const fpsOptions = getCommonFpsOptions(devices, resolution);
 
   return {
-    resolution: resolutionOptions[0] ?? ('1280x720' as Resolution),
-    fps: fpsOptions[0] ?? 30,
+    resolution: resolution ?? ('1280x720' as Resolution),
+    fps: [...fpsOptions].sort((a, b) => Math.abs(a - 30) - Math.abs(b - 30) || a - b)[0] ?? 30,
   };
+}
+
+export function nativeCameraProfiles(native: NativeCamera[], browser: Array<{ deviceId: string; label: string }>): CameraDevice[] {
+  const labelKey = (label: string) => label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').trim().toLowerCase();
+  return native.map(camera => {
+    const matches = browser.filter(device => labelKey(device.label) === labelKey(camera.name));
+    const peers = native.filter(other => labelKey(other.name) === labelKey(camera.name));
+    const ordinal = peers.indexOf(camera);
+    // Same-model cameras are paired in enumeration order, as in the original setup.
+    // Browser IDs and native paths are different namespaces; this is not a physical-ID match.
+    return { id: camera.devicePath ?? String(camera.index), label: peers.length > 1 ? `${camera.name} ${ordinal + 1}` : camera.name, nativeIndex: camera.index,
+      modes: camera.modes, browserDeviceId: matches[ordinal]?.deviceId };
+  });
 }
 
 function pickClosestResolution(width: number, height: number): Resolution {
@@ -89,7 +112,7 @@ export async function probeCamera(deviceId: string): Promise<CameraDevice> {
 
     let suggestedFps: number | undefined;
     if (fpsRange) suggestedFps = Math.min(fpsRange.max, 30);
-    else if (settings.frameRate) suggestedFps = Math.round(settings.frameRate as number);
+    else if (settings.frameRate) suggestedFps = settings.frameRate;
 
     let suggestedResolution: Resolution | undefined;
     let maxResolution: Resolution | undefined;
@@ -121,7 +144,7 @@ export async function probeCamera(deviceId: string): Promise<CameraDevice> {
       defaultRotation = 90;
     }
 
-    const maxFps = fpsRange ? Math.round(Math.min(fpsRange.max, 60)) : (settings.frameRate ? Math.round(settings.frameRate as number) : undefined);
+    const maxFps = fpsRange?.max ?? settings.frameRate;
 
     track.stop();
 
@@ -133,6 +156,8 @@ export async function probeCamera(deviceId: string): Promise<CameraDevice> {
       defaultRotation,
       maxResolution,
       maxFps,
+      minFps: fpsRange?.min,
+      browserDeviceId: deviceId,
     };
   } catch (err) {
     // fallback: return minimal info

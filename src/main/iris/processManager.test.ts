@@ -52,6 +52,49 @@ function cameraIdsFromLastConfig(writeTempConfigFile: ReturnType<typeof vi.fn>):
 }
 
 describe('ProcessManager camera reconciliation', () => {
+  it('rechecks stable device paths and remaps reordered native indices at launch', async () => {
+    const { manager, writeTempConfigFile } = makeManager({ listCameras: async () => [
+      { index: 7, name: 'A', devicePath: 'path-a', modes: [{ width: 1280, height: 720, fpsNumerator: 60, fpsDenominator: 1, format: 'MJPEG' }] },
+      { index: 3, name: 'B', devicePath: 'path-b', modes: [{ width: 1280, height: 720, fpsNumerator: 60, fpsDenominator: 1, format: 'MJPEG' }] },
+    ] });
+    expect((await manager.startRun({ cameras: [
+      { id: 0, devicePath: 'path-a', resolution: '1280x720', fps: 60 },
+      { id: 1, devicePath: 'path-b', resolution: '1280x720', fps: 60 },
+    ] })).ok).toBe(true);
+    expect(cameraIdsFromLastConfig(writeTempConfigFile)).toEqual([7, 3]);
+    expect(writeTempConfigFile.mock.calls.at(-1)![0].shared.camera_groups.capture_rig.fps).toBe(60);
+  });
+
+  it('refuses missing selected devices and unsupported modes before spawning', async () => {
+    const { manager, writeTempConfigFile } = makeManager({ listCameras: async () => [
+      { index: 0, name: 'A', devicePath: 'path-a', modes: [{ width: 1280, height: 720, fpsNumerator: 30, fpsDenominator: 1, format: 'MJPEG' }] },
+    ] });
+    expect((await manager.startRun({ cameras: [{ id: 0, devicePath: 'missing' }] })).error).toContain('no longer available');
+    expect((await manager.startRun({ cameras: [{ id: 0, devicePath: 'path-a', resolution: '1280x720', fps: 60 }] })).error).toContain('does not support');
+    expect(writeTempConfigFile).not.toHaveBeenCalled();
+  });
+
+  it('retains cached capabilities while a running capture holds a device', async () => {
+    let query = 0;
+    const modes = [{ width: 1280, height: 720, fpsNumerator: 120, fpsDenominator: 1, format: 'MJPEG' }];
+    const { manager } = makeManager({ listCameras: async () => [{ index: 0, name: 'A', devicePath: 'path-a', modes: query++ ? [] : modes }] });
+    await manager.getCaptureCameras();
+    expect((await manager.getCaptureCameras())![0].modes).toEqual(modes);
+  });
+
+  it('publishes fragmented capture descriptors and clears confirmation on unexpected exit', async () => {
+    const child = fakeChild();
+    const manager = new ProcessManager({ dependencies: {
+      spawnProcess: () => child, pathExists: () => true, getExecutablePath: () => 'fake',
+      listCameras: async () => null, writeTempConfigFile: () => ({ tmpDir: 'fake', cfgPath: 'fake.json' }),
+    } });
+    await manager.startRun({ run_id: 'capture', camera_width: 1280, camera_height: 720, video_fps: 60000 / 1001, cameras: [{ id: 7 }] });
+    child.stdout.emit('data', 'noise\nIRIS_CAPTURE_SET');
+    child.stdout.emit('data', 'TINGS {"cameraId":7,"width":1280,"height":720,"fpsNumerator":60000,"fpsDenominator":1001,"format":"MJPEG"}\n');
+    expect(manager.getStatus().capture?.[0].fpsNumerator).toBe(60000);
+    child.emit('exit', 1, null);
+    expect(manager.getStatus()).toMatchObject({ failed: true, capture: [] });
+  });
   it('isolates DA3 output directories even when a run ID is reused', async () => {
     const first = makeManager({}), second = makeManager({});
     await first.manager.startRun({ run_id: 'same', cameras: twoConfiguredCameras });

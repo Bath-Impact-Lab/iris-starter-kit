@@ -55,4 +55,21 @@ describe('config', () => {
     expect(status.previewOpen).toBe(false);
     expect(status.runId).toBe(null);
   });
+
+  it('uses the selected shared capture mode and retains fractional FPS', () => {
+    const config = buildConfigFromOptions({ cameras: [
+      { id: 4, resolution: '1280x720', fps: 60000 / 1001 },
+      { id: 7, resolution: '1280x720', fps: 60000 / 1001 },
+    ] });
+    expect(config.runtime.buffers.camera_width).toBe(1280);
+    expect(config.runtime.buffers.camera_height).toBe(720);
+    expect(config.shared.camera_groups.capture_rig).toMatchObject({ camera_ids: [4, 7], width: 1280, height: 720, fps: 60000 / 1001 });
+  });
+
+  it('rejects mixed camera settings and conflicting top-level overrides', () => {
+    expect(() => buildConfigFromOptions({ cameras: [{ fps: 25 }, { fps: 30 }] })).toThrow('same capture');
+    expect(() => buildConfigFromOptions({ video_fps: 30, cameras: [{ fps: 60 }] })).toThrow('same capture');
+    expect(() => buildConfigFromOptions({ cameras: [{ resolution: '1280x720' }, { resolution: '1920x1080' }] })).toThrow('same capture');
+    expect(() => buildConfigFromOptions({ video_fps: NaN })).toThrow('Invalid capture');
+  });
 });

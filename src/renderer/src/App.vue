@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { captureSettings, modeFps, type NegotiatedCapture } from '../../shared/capture';
 import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from './types';
 import { BODY_JOINT_COUNT, countValidKeypoints, extractBodyKeypoints2D } from './utils/pose';
 import CameraSetupModal from './components/CameraSetupModal.vue';
@@ -55,6 +56,11 @@ const videoStreams = ref<VideoStreamDescriptor[]>([]);
 // video we receive already reflects whatever this was set to at the last real run start -- not
 // necessarily cameras.value[0].rotation right now, since a rotation-only edit skips a restart.
 const bakedRotation = ref(0);
+const negotiatedCapture = ref<NegotiatedCapture[]>([]);
+const captureError = ref('');
+const captureDescription = computed(() => negotiatedCapture.value.length ? negotiatedCapture.value.map(c =>
+  `Camera ${c.cameraId + 1}: ${c.width}x${c.height} at ${Number(modeFps(c).toFixed(3))} FPS`).join(' · ') :
+  'Capture settings awaiting confirmation from IRIS.');
 let removePoseListener: (() => void) | null = null;
 
 function getIrisApi(): any {
@@ -91,6 +97,9 @@ onMounted(() => {
   if (api?.subscribe) {
     api.subscribe((status: unknown) => {
       console.log('[starter-kit] iris status:', status);
+      const captureStatus = status as { capture?: NegotiatedCapture[]; error?: string };
+      negotiatedCapture.value = captureStatus.capture ?? [];
+      captureError.value = captureStatus.error ?? '';
     });
   }
 
@@ -117,17 +126,17 @@ async function startIrisRun(config: CameraConfig[]) {
 
   bakedRotation.value = config[0]?.rotation ?? 0;
 
-  // Resolution/fps are rig-wide (matches rotation), so only camera 0's values apply.
-  const [width, height] = (config[0]?.resolution ?? '1920x1080').split('x').map(Number);
-
   try {
+    // Resolution/fps are rig-wide (matches rotation); captureSettings rejects a rig that disagrees.
+    const settings = captureSettings(config);
     const payload = {
       run_id: `starter-${Date.now()}`,
-      camera_width: width,
-      camera_height: height,
-      video_fps: config[0]?.fps ?? 30,
+      camera_width: settings.width,
+      camera_height: settings.height,
+      video_fps: settings.fps,
       cameras: config.map((cam) => ({
-        id: cam.deviceId,
+        id: cam.nativeIndex ?? cam.deviceId,
+        devicePath: cam.nativeIndex !== undefined && !/^\d+$/.test(cam.deviceId) ? cam.deviceId : undefined,
         label: cam.label,
         resolution: cam.resolution,
         fps: cam.fps,
@@ -137,8 +146,10 @@ async function startIrisRun(config: CameraConfig[]) {
 
     const runResult = await api.startRun(payload);
     console.log('[starter-kit] startRun:', runResult);
+    if (!runResult.ok) captureError.value = runResult.error ?? 'IRIS capture could not start';
   } catch (error) {
     console.warn('[starter-kit] startRun failed:', error);
+    captureError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -312,6 +323,8 @@ function replayTour() {
         </button>
       </div>
     </header>
+    <p v-if="captureError" role="alert" class="capture-status">{{ captureError }}</p>
+    <p v-else-if="phase !== 'camera-setup'" class="capture-status">{{ captureDescription }}</p>
 
     <main class="main">
       <LiveView
@@ -388,6 +401,7 @@ function replayTour() {
 </template>
 
 <style scoped>
+.capture-status { margin: 0; padding: 8px 20px; color: #a6b8cf; font-size: 13px; }
 .shell {
   display: flex;
   flex-direction: column;
