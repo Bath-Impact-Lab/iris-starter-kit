@@ -14,17 +14,15 @@ export class RoiStore {
       return value;
     } catch { return null; }
   }
-  save(state: RoiState, captureRotation: number) {
+  save(state: RoiState) {
     const value: SavedRoi = {
-      schemaVersion: 1, mode: state.mode, source: state.source,
-      deviceKey: state.cameras.find(c => c.cameraId === state.source?.cameraId)?.deviceKey,
-      captureRotation, worldPolygon: state.worldPolygon, savedAt: new Date().toISOString(),
+      schemaVersion: 1, mode: state.mode, worldPolygon: state.worldPolygon,
       calibrationVersion: state.calibrationVersion, runId: state.runId, floorHeight: state.floorHeight,
-      rigDeviceKeys: state.cameras.map(c => c.deviceKey).filter((key): key is string => Boolean(key)),
     };
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const temp = this.file + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(value, null, 2), 'utf8');
     fs.renameSync(temp, this.file);
+    return value;
   }
 }

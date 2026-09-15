@@ -37,21 +37,15 @@ export interface RoiEdit {
   mode: RoiMode;
   calibrationVersion: number;
   roiVersion: number;
-  source?: RoiSource;
   worldPolygon?: Point2[];
 }
 export interface SavedRoi {
   schemaVersion: 1;
   mode: RoiMode;
-  source: RoiSource | null;
-  deviceKey?: string;
-  captureRotation: number;
   calibrationVersion?: number;
   runId?: string;
-  rigDeviceKeys?: string[];
   floorHeight?: number;
   worldPolygon: Point2[];
-  savedAt: string;
 }
 export interface RoiReply {
   ok: boolean;

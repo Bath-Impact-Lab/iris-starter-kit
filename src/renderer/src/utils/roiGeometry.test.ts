@@ -1,16 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { rotatePoint, orientedSize, cameraRay, suggestedRectangle } from './roiGeometry';
-describe('ROI image coordinates', () => {
-  it.each([0, 90, 180, 270, -90, 450])('round trips rotation %i without changing canonical coordinates', rotation => {
-    for (const point of [[0, 0], [1, 1], [.2, .7]] as [number, number][]) {
-      const restored = rotatePoint(rotatePoint(point, rotation), -rotation);
-      expect(restored[0]).toBeCloseTo(point[0]); expect(restored[1]).toBeCloseTo(point[1]);
-    }
+import { orientedSize, cameraRay, suggestedRectangle } from './roiGeometry';
+describe('ROI preview dimensions', () => {
+  it.each([0, 180, 360])('preserves dimensions at %i degrees', rotation => {
+    expect(orientedSize(800, 600, rotation)).toEqual([800, 600]);
   });
-  it('rotates non-widescreen dimensions and corners correctly', () => {
-    expect(orientedSize(800, 600, 90)).toEqual([600, 800]);
-    expect(rotatePoint([0, 0], 90)).toEqual([1, 0]);
-    expect(rotatePoint([1, 0], 270)).toEqual([0, 0]);
+  it.each([90, 270, -90, 450])('swaps dimensions at %i degrees', rotation => {
+    expect(orientedSize(800, 600, rotation)).toEqual([600, 800]);
   });
 });
 

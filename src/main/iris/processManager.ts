@@ -155,7 +155,6 @@ export class ProcessManager {
   private streamSessionId: string | null = null
   private roiClient: RoiClient | null = null
   private da3Scene: Da3SceneSource | null = null
-  captureRotation = 0
 
   async roiRequest(operation: RoiOperation, edit?: RoiEdit): Promise<RoiReply> {
     const client = this.roiClient
@@ -464,7 +463,6 @@ export class ProcessManager {
     this.roiClient = new RoiClient(controlPipe, options.run_id ?? sessionId)
     const runRoiClient = this.roiClient
     this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
-    this.captureRotation = options.rotation ?? options.cameras?.[0]?.rotation ?? 0
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
     const child = this.spawnProcess(cliPath, ['run', cfgPath, '--control-pipe', controlPipe], {

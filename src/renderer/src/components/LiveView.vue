@@ -207,7 +207,7 @@ onBeforeUnmount(() => {
             class="feed-video"
             :class="`rotate-${displayRotation(cam.rotation)}`"
           />
-          <div v-if="!hasStream(index)" class="feed-inner" :class="`rotate-${displayRotation(cam.rotation)}`">
+          <div v-else class="feed-inner" :class="`rotate-${displayRotation(cam.rotation)}`">
             <span class="feed-label">Camera feed</span>
           </div>
         </div>
@@ -342,7 +342,6 @@ onBeforeUnmount(() => {
 }
 
 .feed {
-  position: relative;
   flex: 1;
   min-height: 200px;
   background: #0a0c10;

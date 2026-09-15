@@ -76,13 +76,14 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   });
 
   const roiStore = new RoiStore(path.join(app.getPath('userData'), 'capture-area.json'));
-  ipcMain.handle('roi:get', async () => ({ ...await processManager.roiRequest('roi.get'), saved: roiStore.load() }));
+  let savedRoi = roiStore.load();
+  ipcMain.handle('roi:get', async () => ({ ...await processManager.roiRequest('roi.get'), saved: savedRoi }));
   ipcMain.handle('roi:preview', async (_event, edit: RoiEdit) => processManager.roiRequest('roi.preview', edit));
   ipcMain.handle('roi:scene', async (_event, key: SceneKey) => processManager.roiScene(key));
   ipcMain.handle('roi:apply', async (_event, edit: RoiEdit) => {
     const result = await processManager.roiRequest('roi.apply', edit);
     if (result.ok && result.state) {
-      try { roiStore.save(result.state, processManager.captureRotation); }
+      try { savedRoi = roiStore.save(result.state); }
       catch (error) { result.saveError = `Applied, but could not save: ${String(error)}`; }
     }
     return result;

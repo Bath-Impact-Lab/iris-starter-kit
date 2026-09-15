@@ -1,12 +1,4 @@
 import type { Point2, RoiCamera } from '../../../shared/roi';
-export function rotatePoint([x, y]: Point2, rotation: number): Point2 {
-  switch (((rotation % 360) + 360) % 360) {
-    case 90: return [1 - y, x];
-    case 180: return [1 - x, 1 - y];
-    case 270: return [y, 1 - x];
-    default: return [x, y];
-  }
-}
 export function orientedSize(width: number, height: number, rotation: number): [number, number] {
   return Math.abs(rotation % 180) === 90 ? [height, width] : [width, height];
 }
