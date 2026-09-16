@@ -1,3 +1,4 @@
+import { poseModel } from '../../shared/poseModels';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -204,7 +205,13 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
 
   config.shared.models.detection.yolox_people.yolox_engine_path = `${modelDir}/yolox_s_bs16.trt`;
   config.shared.models.reid.osnet_x05.engine_path = `${modelDir}/osnet_x05_fp16.trt`;
-  config.shared.models.pose.rtmpose_people.engine = `${modelDir}/rtmpose_bs16_fp16.trt`;
+  const model = poseModel(options.pose_model);
+  Object.assign(config.shared.models.pose.rtmpose_people, {
+    engine: `${modelDir}/${model.engine}`,
+    input_w: model.width,
+    input_h: model.height,
+    num_keypoints: model.keypoints,
+  });
 
   // A published calibration replaces live auto-calibration: triangulation
   // reads a fixed extrinsics file instead of estimating poses each run.

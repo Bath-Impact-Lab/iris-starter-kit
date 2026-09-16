@@ -1,3 +1,4 @@
+import type { PoseModelId } from '../../shared/poseModels';
 export type AppPhase = 'camera-setup' | 'calibration' | 'live';
 
 export type Resolution = `${number}x${number}`;
@@ -61,6 +62,8 @@ export interface PosePerson {
 }
 
 export interface PoseFrame {
+  pose_model?: PoseModelId;
+  run_id?: string;
   frame_seq?: number;
   timestamp?: number;
   slot_timestamp?: number;

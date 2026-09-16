@@ -2,9 +2,54 @@ import type { CameraDevice, Resolution } from '../types';
 import { RESOLUTIONS } from '../data/mock';
 import { usableModes, modeFps, sameFps, type NativeCamera } from '../../../shared/capture';
 
-function parseResolution(res: string): { w: number; h: number } {
+export function parseResolution(res: string): { w: number; h: number } {
   const [w, h] = res.split('x').map((v) => parseInt(v, 10));
   return { w: Number.isFinite(w) ? w : 0, h: Number.isFinite(h) ? h : 0 };
+}
+
+export function previewVideoConstraints(
+  deviceId: string,
+  resolution: Resolution,
+  fps: number,
+  exactSize = true,
+): MediaTrackConstraints {
+  const { w, h } = parseResolution(resolution);
+  const constraints: MediaTrackConstraints = {
+    deviceId: { exact: deviceId },
+    width: exactSize ? { exact: w } : { ideal: w },
+    height: exactSize ? { exact: h } : { ideal: h },
+    frameRate: { ideal: fps },
+    aspectRatio: { ideal: w / h },
+  };
+  // Chromium supports this standard constraint, but TypeScript's bundled DOM
+  // declarations do not include it yet. It asks the browser not to crop and
+  // scale a different sensor mode to satisfy the requested dimensions.
+  (constraints as MediaTrackConstraints & { resizeMode: { ideal: string } }).resizeMode = { ideal: 'none' };
+  return constraints;
+}
+
+export interface PreviewMode {
+  width?: number;
+  height?: number;
+  fps?: number;
+  approximate: boolean;
+}
+
+export function describePreviewMode(
+  settings: Pick<MediaTrackSettings, 'width' | 'height' | 'frameRate'>,
+  resolution: Resolution,
+  fps: number,
+): PreviewMode {
+  const target = parseResolution(resolution);
+  const width = Number.isFinite(settings.width) ? settings.width : undefined;
+  const height = Number.isFinite(settings.height) ? settings.height : undefined;
+  const actualFps = Number.isFinite(settings.frameRate) ? settings.frameRate : undefined;
+  return {
+    width,
+    height,
+    fps: actualFps,
+    approximate: width !== target.w || height !== target.h || actualFps === undefined || Math.abs(actualFps - fps) > 0.5,
+  };
 }
 
 export function getCommonResolutionOptions(devices: CameraDevice[]): Resolution[] {

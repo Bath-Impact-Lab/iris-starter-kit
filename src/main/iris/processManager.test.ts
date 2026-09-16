@@ -51,6 +51,44 @@ function cameraIdsFromLastConfig(writeTempConfigFile: ReturnType<typeof vi.fn>):
   return lastConfig?.shared?.camera_groups?.capture_rig?.camera_ids ?? [];
 }
 
+describe('ProcessManager pose models', () => {
+  it('passes the selected model to the pipeline', async () => {
+    const { manager, writeTempConfigFile } = makeManager({});
+    expect((await manager.startRun({ pose_model: 'rtmw-coco133', cameras: twoConfiguredCameras })).ok).toBe(true);
+    expect(writeTempConfigFile.mock.calls.at(-1)![0].shared.models.pose.rtmpose_people)
+      .toMatchObject({ num_keypoints: 133, input_w: 288, input_h: 384 });
+    await manager.stopAll();
+  });
+
+  it('tags monitor frames with the model and run captured when the monitor opens', async () => {
+    let receive: (frame: unknown) => void = () => {};
+    const manager = new ProcessManager({ dependencies: {
+      spawnProcess: () => fakeChild(), pathExists: () => true,
+      getExecutablePath: () => 'C:\\fake\\iris_cli.exe', listCameras: async () => null,
+      writeTempConfigFile: () => ({ tmpDir: 'C:\\fake', cfgPath: 'C:\\fake\\config.json' }),
+      createPipeServer: async (options) => { receive = options.onFrame; return { close: () => {} } as any; },
+      videoRelayServer: { stop: async () => {} } as any,
+    } });
+    await manager.startRun({ run_id: 'model-a', pose_model: 'rtmw-coco133' });
+    const onFrame = vi.fn();
+    await manager.startStream({ sessionId: 'monitor-a', options: {}, onFrame });
+    receive({ people: [] });
+    expect(onFrame).toHaveBeenLastCalledWith({ people: [], pose_model: 'rtmw-coco133', run_id: 'model-a' });
+    await manager.stopAll();
+    receive({ people: [] });
+    expect(onFrame).toHaveBeenLastCalledWith({ people: [], pose_model: 'rtmw-coco133', run_id: 'model-a' });
+  });
+
+  it('rejects unknown model IDs before spawning', async () => {
+    const spawnProcess = vi.fn(() => fakeChild());
+    const { manager } = makeManager({ spawnProcess });
+    const result = await manager.startRun({ pose_model: 'invalid' as any });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Unknown pose model');
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+});
+
 describe('ProcessManager camera reconciliation', () => {
   it.each([[120, 120], [60000 / 1001, 60], [30, 30]])('passes monitor rate %s to Core as %s', async (targetFps, expected) => {
     const spawnProcess = vi.fn(() => fakeChild());

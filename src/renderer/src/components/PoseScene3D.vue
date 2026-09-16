@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { MocapViewSettings, PoseFrame } from '../types';
-import { HALPE26_JOINT_NAMES, extractJointCenters3D, type JointCenter3D } from '../utils/pose';
+import { skeletonForFrame, extractJointCenters3D, type JointCenter3D } from '../utils/pose';
 
 const props = defineProps<{
   pose?: PoseFrame | null;
@@ -12,20 +12,7 @@ const props = defineProps<{
 
 const containerRef = ref<HTMLElement | null>(null);
 
-// Bone connectivity between HALPE26_JOINT_NAMES entries.
-const BONE_PAIRS: Array<[(typeof HALPE26_JOINT_NAMES)[number], (typeof HALPE26_JOINT_NAMES)[number]]> = [
-  ['nose', 'l_eye'], ['nose', 'r_eye'], ['l_eye', 'l_ear'], ['r_eye', 'r_ear'],
-  ['head', 'neck'], ['neck', 'l_shoulder'], ['neck', 'r_shoulder'],
-  ['l_shoulder', 'l_elbow'], ['l_elbow', 'l_wrist'],
-  ['r_shoulder', 'r_elbow'], ['r_elbow', 'r_wrist'],
-  ['l_shoulder', 'r_shoulder'],
-  ['l_hip', 'r_hip'],
-  ['l_hip', 'l_knee'], ['l_knee', 'l_ankle'],
-  ['r_hip', 'r_knee'], ['r_knee', 'r_ankle'],
-  ['neck', 'pelvis'], ['pelvis', 'l_hip'], ['pelvis', 'r_hip'],
-  ['l_ankle', 'l_big_toe'], ['l_ankle', 'l_small_toe'], ['l_ankle', 'l_heel'],
-  ['r_ankle', 'r_big_toe'], ['r_ankle', 'r_small_toe'], ['r_ankle', 'r_heel'],
-];
+
 
 const JOINT_RADIUS = 0.035;
 // Per-frame joint data can be noisy/intermittent (occlusion, low confidence). Smooth
@@ -51,12 +38,13 @@ const jointGeometry = new THREE.SphereGeometry(JOINT_RADIUS, 16, 12);
 const jointMaterial = new THREE.MeshStandardMaterial({ color: 0x6b9fff, emissive: 0x0d1c3a, roughness: 0.4 });
 const boneMaterial = new THREE.MeshStandardMaterial({ color: 0x4a72c4, roughness: 0.5 });
 
-const joints = new Map<(typeof HALPE26_JOINT_NAMES)[number], THREE.Mesh>();
+const joints = new Map<string, THREE.Mesh>();
 const bones = new Map<string, THREE.Mesh>();
 const jointState = new Map<string, JointState>();
 
 function isValid(center: JointCenter3D | undefined): center is JointCenter3D {
-  return Boolean(center) && (center!.x !== 0 || center!.y !== 0 || center!.z !== 0);
+  return !!center && [center.x, center.y, center.z].every(Number.isFinite) &&
+    (center.x !== 0 || center.y !== 0 || center.z !== 0);
 }
 
 function buildScene(container: HTMLElement): void {
@@ -85,19 +73,7 @@ function buildScene(container: HTMLElement): void {
   const grid = new THREE.GridHelper(10, 20, 0x35507a, 0x1c2431);
   scene.add(grid);
 
-  for (const name of HALPE26_JOINT_NAMES) {
-    const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
-    mesh.visible = false;
-    joints.set(name, mesh);
-    jointState.set(name, { smoothed: new THREE.Vector3(), missCount: 0, everValid: false });
-    scene.add(mesh);
-  }
-  for (const [from, to] of BONE_PAIRS) {
-    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(props.settings.boneThickness, 0.1, 4, 8), boneMaterial);
-    mesh.visible = false;
-    bones.set(`${from}-${to}`, mesh);
-    scene.add(mesh);
-  }
+  rebuildSkeleton();
 
   resizeScene(container.clientWidth, container.clientHeight);
   resizeObserver = new ResizeObserver((entries) => {
@@ -111,6 +87,34 @@ function buildScene(container: HTMLElement): void {
     if (renderer && scene && camera) renderer.render(scene, camera);
   };
   animationFrameId = requestAnimationFrame(animate);
+}
+
+let skeleton = skeletonForFrame(null);
+function rebuildSkeleton(): void {
+  if (!scene) return;
+  for (const mesh of joints.values()) scene.remove(mesh);
+  for (const mesh of bones.values()) { scene.remove(mesh); mesh.geometry.dispose(); }
+  joints.clear();
+  bones.clear();
+  jointState.clear();
+  skeleton = skeletonForFrame(props.pose);
+  for (const name of skeleton.names) {
+    const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
+    mesh.visible = false;
+    if (name.startsWith('face_') || name.includes('_hand_')) mesh.scale.setScalar(0.25);
+    joints.set(name, mesh);
+    jointState.set(name, { smoothed: new THREE.Vector3(), missCount: 0, everValid: false });
+    scene.add(mesh);
+  }
+  for (const [from, to] of skeleton.bones) {
+    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(props.settings.boneThickness, 0.1, 4, 8), boneMaterial);
+    mesh.visible = false;
+    mesh.userData.detail = from.startsWith('face_') || from.includes('_hand_');
+    bones.set(`${from}-${to}`, mesh);
+    scene.add(mesh);
+  }
+
+  updateScene();
 }
 
 function resizeScene(width: number, height: number): void {
@@ -133,13 +137,15 @@ function updateBone(start: THREE.Vector3, end: THREE.Vector3, mesh: THREE.Mesh):
   }
 
   mesh.geometry.dispose();
-  mesh.geometry = new THREE.CapsuleGeometry(props.settings.boneThickness, length, 4, 8);
+  const detail = mesh.userData.detail ? 0.25 : 1;
+  mesh.geometry = new THREE.CapsuleGeometry(props.settings.boneThickness * detail, length, 4, 8);
   mesh.visible = true;
   mesh.position.copy(start).add(end).multiplyScalar(0.5);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.clone().sub(start).normalize());
 }
 
 function updateScene(): void {
+  if (skeleton !== skeletonForFrame(props.pose)) { rebuildSkeleton(); return; }
   const centers = extractJointCenters3D(props.pose);
   const byName = new Map(centers.map((center) => [center.name, center]));
 
@@ -163,7 +169,7 @@ function updateScene(): void {
     }
   }
 
-  for (const [from, to] of BONE_PAIRS) {
+  for (const [from, to] of skeleton.bones) {
     const mesh = bones.get(`${from}-${to}`);
     const fromMesh = joints.get(from);
     const toMesh = joints.get(to);
@@ -192,6 +198,8 @@ onBeforeUnmount(() => {
   controls?.dispose();
   for (const mesh of bones.values()) mesh.geometry.dispose();
   jointGeometry.dispose();
+  jointMaterial.dispose();
+  boneMaterial.dispose();
   renderer?.dispose();
   renderer?.domElement.remove();
 });

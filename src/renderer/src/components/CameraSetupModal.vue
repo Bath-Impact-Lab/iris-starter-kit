@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { CameraConfig, CameraDevice, Resolution, VideoStreamDescriptor } from '../types';
 import { ROTATION_OPTIONS } from '../data/mock';
-import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig, nativeCameraProfiles } from '../utils/camera-probe';
+import { describePreviewMode, ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig, nativeCameraProfiles, previewVideoConstraints, type PreviewMode } from '../utils/camera-probe';
 import { sameFps } from '../../../shared/capture';
 import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import AppModal from './AppModal.vue';
@@ -11,6 +11,8 @@ const props = defineProps<{
   open: boolean;
   // True when reopened from Settings to edit an already-running setup.
   editing?: boolean;
+  continueDisabled?: boolean;
+  continueLabel?: string;
   // IRIS's own live video streams -- reused for the preview since IRIS
   // already holds each device and a second getUserMedia() grab would fail.
   videoStreams?: VideoStreamDescriptor[];
@@ -41,6 +43,9 @@ const selectedIds = ref<Set<string>>(new Set());
 const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
+const previewModes = ref<Record<string, PreviewMode | null>>({});
+const previewErrors = ref<Set<string>>(new Set());
+const previewGeneration = new Map<string, number>();
 const loading = ref(false);
 const rigResolution = ref<Resolution>('1920x1080'), rigFps = ref(30);
 const selectedProfiles = computed(() => deviceProfiles.value.filter(device => selectedIds.value.has(device.id)));
@@ -341,12 +346,40 @@ async function startPreview(deviceId: string) {
     return;
   }
 
+  const config = cameras.value.find(cam => cam.deviceId === deviceId);
+  const browserId = config?.browserDeviceId ?? (config?.nativeIndex === undefined ? deviceId : undefined);
+  if (!browserId) {
+    previewErrors.value = new Set(previewErrors.value).add(deviceId);
+    return;
+  }
+  const generation = (previewGeneration.get(deviceId) ?? 0) + 1;
+  previewGeneration.set(deviceId, generation);
+  previewErrors.value = new Set([...previewErrors.value].filter(id => id !== deviceId));
+  previewModes.value = { ...previewModes.value, [deviceId]: null };
+
   try {
-    const config = cameras.value.find(cam => cam.deviceId === deviceId);
-    const browserId = config?.browserDeviceId ?? (config?.nativeIndex === undefined ? deviceId : undefined);
-    if (!browserId) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: browserId } } });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: previewVideoConstraints(browserId, rigResolution.value, rigFps.value),
+      });
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'OverconstrainedError') throw error;
+      if (previewGeneration.get(deviceId) !== generation) return;
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: previewVideoConstraints(browserId, rigResolution.value, rigFps.value, false),
+      });
+    }
+    if (previewGeneration.get(deviceId) !== generation) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
     activeStreams.value[deviceId] = stream;
+    const settings = stream.getVideoTracks()[0]?.getSettings() ?? {};
+    previewModes.value = {
+      ...previewModes.value,
+      [deviceId]: describePreviewMode(settings, rigResolution.value, rigFps.value),
+    };
     await nextTick();
     const video = videoElements.value[deviceId];
     if (video) {
@@ -356,22 +389,49 @@ async function startPreview(deviceId: string) {
       });
     }
   } catch {
-    // ignore preview failures; user can still configure camera settings
+    if (previewGeneration.get(deviceId) === generation) {
+      previewErrors.value = new Set(previewErrors.value).add(deviceId);
+    }
   }
 }
 
 function stopPreview(deviceId: string) {
+  previewGeneration.set(deviceId, (previewGeneration.get(deviceId) ?? 0) + 1);
   const stream = activeStreams.value[deviceId];
-  if (!stream) {
-    return;
-  }
-
-  stream.getTracks().forEach((track) => track.stop());
+  stream?.getTracks().forEach((track) => track.stop());
   delete activeStreams.value[deviceId];
+  const nextModes = { ...previewModes.value };
+  delete nextModes[deviceId];
+  previewModes.value = nextModes;
 }
 
 function stopAllPreviews() {
-  Object.keys(activeStreams.value).forEach((deviceId) => stopPreview(deviceId));
+  cameras.value.forEach(camera => stopPreview(camera.deviceId));
+}
+
+async function restartVisibleBrowserPreviews(): Promise<void> {
+  if (!props.open || loading.value) return;
+  const deviceIds = [...expandedIds.value].filter(deviceId => !hasIrisStream(deviceId));
+  deviceIds.forEach(stopPreview);
+  await Promise.all(deviceIds.map(startPreview));
+}
+
+watch([rigResolution, rigFps], ([resolution, fps], previous) => {
+  if (!previous || resolution === previous[0] && sameFps(fps, previous[1])) return;
+  void restartVisibleBrowserPreviews();
+});
+
+function formatPreviewFps(fps: number | undefined): string {
+  return fps === undefined ? '' : ` · ${Number(fps.toFixed(2))} fps`;
+}
+
+function previewLabel(deviceId: string): string {
+  if (hasIrisStream(deviceId)) return `Capture preview · ${rigResolution.value} · ${Number(rigFps.value.toFixed(2))} fps`;
+  if (previewErrors.value.has(deviceId)) return 'Preview unavailable';
+  const mode = previewModes.value[deviceId];
+  if (!mode) return `Opening ${rigResolution.value} preview…`;
+  const actual = mode.width && mode.height ? `${mode.width}×${mode.height}${formatPreviewFps(mode.fps)}` : 'mode unavailable';
+  return mode.approximate ? `Approximate preview · ${actual} · target ${rigResolution.value}` : `Preview · ${actual}`;
 }
 
 async function toggleCameraExpansion(deviceId: string) {
@@ -526,7 +586,9 @@ function onDisplayNameChange(cam: CameraConfig) {
               muted
               playsinline
             />
-            <div class="preview-overlay">Live camera preview</div>
+            <div class="preview-overlay" :class="{ approximate: previewModes[cam.deviceId]?.approximate }" :title="previewLabel(cam.deviceId)">
+              {{ previewLabel(cam.deviceId) }}
+            </div>
           </div>
 
           <div class="config-grid" :data-tour="camIndex === 0 ? 'camera-config' : undefined">
@@ -546,10 +608,12 @@ function onDisplayNameChange(cam: CameraConfig) {
       </div>
     </div>
 
+    <slot />
+
     <template #footer>
       <span v-if="!loading && selectedCameras.length === 0" class="footer-warning">Select at least one camera to continue.</span>
-      <button type="button" class="btn primary" data-tour="continue-setup" :disabled="loading || !validRig" @click="onContinue">
-        {{ editing ? 'Done' : 'Continue' }}{{ selectedCameras.length > 0 ? ` (${selectedCameras.length} selected)` : '' }}
+      <button type="button" class="btn primary" data-tour="continue-setup" :disabled="loading || !validRig || continueDisabled" @click="onContinue">
+        {{ continueLabel ?? (editing ? 'Done' : 'Continue') }}{{ selectedCameras.length > 0 ? ` (${selectedCameras.length} selected)` : '' }}
       </button>
     </template>
   </AppModal>
@@ -738,6 +802,14 @@ function onDisplayNameChange(cam: CameraConfig) {
   padding: 6px 10px;
   border-radius: 999px;
   pointer-events: none;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-overlay.approximate {
+  color: #fbbf24;
 }
 
 .config-grid {

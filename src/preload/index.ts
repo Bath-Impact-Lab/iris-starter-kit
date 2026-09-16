@@ -1,3 +1,4 @@
+import type { PoseModelId, PoseModelAvailability } from '../shared/poseModels';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { RoiEdit, RoiReply, SceneKey, Da3SceneReply } from '../shared/roi';
 import type { NativeCamera } from '../shared/capture';
@@ -23,6 +24,8 @@ interface RunConfig {
 }
 
 const irisApi = {
+  listPoseModels: () => ipcRenderer.invoke('pose-models:list') as Promise<PoseModelAvailability[]>,
+  validatePoseModel: (id: PoseModelId) => ipcRenderer.invoke('pose-models:validate', id) as Promise<void>,
   roiScene: (key: SceneKey) => ipcRenderer.invoke('roi:scene', key) as Promise<Da3SceneReply>,
   roiGet: () => ipcRenderer.invoke('roi:get') as Promise<RoiReply>,
   roiPreview: (edit: RoiEdit) => ipcRenderer.invoke('roi:preview', edit) as Promise<RoiReply>,

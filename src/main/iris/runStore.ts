@@ -1,3 +1,4 @@
+import type { PoseModelId } from '../../shared/poseModels'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -10,6 +11,7 @@ export interface IrisRunRecord {
   createdAt: string
   updatedAt: string
   cameraCount: number
+  poseModel?: PoseModelId
   assets: string[]
   error?: string
 }
@@ -21,7 +23,7 @@ export class IrisRunStore {
     this.directory = path.join(userDataDirectory, 'iris-runs')
   }
 
-  async create(runId: string, cameraCount: number): Promise<IrisRunRecord> {
+  async create(runId: string, cameraCount: number, poseModel?: PoseModelId): Promise<IrisRunRecord> {
     const now = new Date().toISOString()
     const record: IrisRunRecord = {
       schemaVersion: 1,
@@ -30,6 +32,7 @@ export class IrisRunStore {
       createdAt: now,
       updatedAt: now,
       cameraCount,
+      poseModel,
       assets: [],
     }
     await this.save(record)

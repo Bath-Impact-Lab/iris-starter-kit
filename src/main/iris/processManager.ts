@@ -1,3 +1,4 @@
+import { DEFAULT_POSE_MODEL, poseModel, type PoseModelId } from '../../shared/poseModels'
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
@@ -99,6 +100,7 @@ export interface IrisDispatcherStatus {
 }
 
 export interface StartIrisRunInput {
+  pose_model?: PoseModelId
   roi_mode?: 'off' | 'automatic'
   specFile?: string
   verbose?: boolean
@@ -156,6 +158,7 @@ export class ProcessManager {
   }
 
   private readonly runStore?: IrisRunStore
+  private activePoseModel: PoseModelId | undefined
   private streamSessionId: string | null = null
   private roiClient: RoiClient | null = null
   private da3Scene: Da3SceneSource | null = null
@@ -296,7 +299,7 @@ export class ProcessManager {
 
   async startRun(input: StartIrisRunInput = {}): Promise<{ ok: boolean; runId: string | null; state: IrisDispatcherState; runCount: number; failed: boolean; error?: string }> {
     const runId = input.run_id ?? `run-${Date.now()}`
-    await this.runStore?.create(runId, input.cameras?.length ?? 0)
+    await this.runStore?.create(runId, input.cameras?.length ?? 0, input.pose_model ?? DEFAULT_POSE_MODEL)
 
     const cliPath = this.getExecutablePath()
     if (!this.pathExists(cliPath)) {
@@ -325,6 +328,7 @@ export class ProcessManager {
     let cameras: NonNullable<StartIrisRunInput['cameras']>
     let settings: ReturnType<typeof captureSettings>
     try {
+      poseModel(input.pose_model)
       settings = captureSettings(input.cameras ?? [], input)
       cameras = await this.reconcileCameras(input.cameras ?? [], settings)
     } catch (error) {
@@ -351,6 +355,7 @@ export class ProcessManager {
       options: {
         run_id: runId,
         roi_mode: input.roi_mode,
+        pose_model: input.pose_model,
         camera_width: settings.width,
         camera_height: settings.height,
         video_fps: settings.fps,
@@ -385,6 +390,7 @@ export class ProcessManager {
     this.emitStatus({ state: 'running', runId, previewOpen: false, previewMonitorAttached: false, failed: false })
     await this.runStore?.update(runId, { state: 'recording' })
 
+    this.activePoseModel = poseModel(input.pose_model).id
     return {
       ok: true,
       runId,
@@ -464,6 +470,7 @@ export class ProcessManager {
   }
 
   async stopAll(): Promise<void> {
+    this.activePoseModel = undefined
     this.emitStatus({
       state: 'stopping',
       stopping: true,
@@ -597,6 +604,8 @@ export class ProcessManager {
     }
 
     const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
+    const modelId = this.activePoseModel
+    const runId = this.status.runId
     const posePipePath: string = options.posePipePath ?? this.pipeName
     const shmName: string = options.sharedMemoryName ?? 'iris_shm_ipc'
     const videoPipes: Array<{ cameraIndex: number; pipePath: string }> = options.videoPipes ?? []
@@ -613,7 +622,9 @@ export class ProcessManager {
       console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${posePipePath}`)
       pipeServer = await this.openPipeServer({
         pipeName: posePipePath,
-        onFrame: (frame) => onFrame?.(frame),
+        onFrame: (frame) => onFrame?.(frame && typeof frame === 'object'
+          ? { ...frame, pose_model: modelId, run_id: runId }
+          : frame),
       })
       console.log(`[iris:monitor:${sessionId}] step 2/4 done -- named pipe listening`)
 

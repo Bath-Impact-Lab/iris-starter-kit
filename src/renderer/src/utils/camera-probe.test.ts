@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { getCommonResolutionOptions, getCommonFpsOptions, nativeCameraProfiles, selectCommonConfig } from './camera-probe';
+import { describePreviewMode, getCommonResolutionOptions, getCommonFpsOptions, nativeCameraProfiles, previewVideoConstraints, selectCommonConfig } from './camera-probe';
 import type { CameraMode } from '../../../shared/capture';
 
 const mode = (width: number, height: number, numerator: number, denominator = 1, format = 'MJPEG'): CameraMode =>
@@ -42,4 +42,21 @@ it('assigns separate previews to identical models in enumeration order', () => {
     .toEqual(['browser', undefined]);
   expect(nativeCameraProfiles([native[0]], [{ deviceId: 'browser', label: 'Same camera' }])[0])
     .toMatchObject({ id: 'path-a', nativeIndex: 4, browserDeviceId: 'browser' });
+});
+
+it('requests the selected capture shape and reports negotiated differences', () => {
+  expect(previewVideoConstraints('camera-a', '1920x1080', 30)).toMatchObject({
+    deviceId: { exact: 'camera-a' },
+    width: { exact: 1920 },
+    height: { exact: 1080 },
+    frameRate: { ideal: 30 },
+    aspectRatio: { ideal: 16 / 9 },
+    resizeMode: { ideal: 'none' },
+  });
+  expect(previewVideoConstraints('camera-a', '1920x1080', 30, false)).toMatchObject({
+    width: { ideal: 1920 }, height: { ideal: 1080 },
+  });
+  expect(describePreviewMode({ width: 1920, height: 1080, frameRate: 29.97 }, '1920x1080', 30))
+    .toEqual({ width: 1920, height: 1080, fps: 29.97, approximate: false });
+  expect(describePreviewMode({ width: 640, height: 480, frameRate: 30 }, '1920x1080', 30).approximate).toBe(true);
 });

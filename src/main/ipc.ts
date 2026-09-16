@@ -1,3 +1,4 @@
+import { listPoseModels, validatePoseModel } from './iris/poseModels';
 import { ipcMain, BrowserWindow, app } from 'electron';
 import path from 'node:path';
 import { RoiStore } from './iris/roiStore.js';
@@ -75,6 +76,11 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     runtime: createProcessManagerRigCalibrationRuntime(processManager),
   });
 
+  ipcMain.handle('pose-models:list', () => listPoseModels());
+  ipcMain.handle('pose-models:validate', (_event, id: unknown) => {
+    validatePoseModel(id);
+  });
+
   ipcMain.handle('cameras:capture', () => processManager.getCaptureCameras());
 
   const roiStore = new RoiStore(path.join(app.getPath('userData'), 'capture-area.json'));
@@ -101,6 +107,8 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   ipcMain.handle('iris:get-status', () => processManager.getStatus());
 
   ipcMain.handle('iris:start-run', async (_event, input = {}) => {
+    try { validatePoseModel(input.pose_model); }
+    catch (error) { return { ok: false, error: String(error instanceof Error ? error.message : error) }; }
     // A published calibration for this exact camera setup takes over from
     // live auto-calibration. Otherwise falls back to today's behavior.
     const extrinsicsFile = rigCalibration.resolveExtrinsicsFile(cameraFingerprintFor(input));
