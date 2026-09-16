@@ -76,12 +76,17 @@ watch(settingsOpen, open => { if (open) { selectedPoseModel.value = activePoseMo
 const DEFAULT_MOCAP_SETTINGS: MocapViewSettings = {
   scale: 1.3,
   boneThickness: 0.014,
+  view: 'skeleton',
 };
 
 function loadMocapSettings(): MocapViewSettings {
   try {
     const stored = JSON.parse(localStorage.getItem('mocap-view-settings') ?? 'null');
-    return stored ? { ...DEFAULT_MOCAP_SETTINGS, ...stored } : { ...DEFAULT_MOCAP_SETTINGS };
+    if (!stored) return { ...DEFAULT_MOCAP_SETTINGS };
+    const settings = { ...DEFAULT_MOCAP_SETTINGS, ...stored };
+    // Views this build doesn't have (e.g. saved by a newer or forked build) fall back to the default.
+    if (settings.view !== 'skeleton' && settings.view !== 'mesh') settings.view = DEFAULT_MOCAP_SETTINGS.view;
+    return settings;
   } catch {
     return { ...DEFAULT_MOCAP_SETTINGS };
   }

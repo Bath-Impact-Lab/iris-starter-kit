@@ -19,6 +19,9 @@ const props = defineProps<{
 
 const mocapSettings = defineModel<MocapViewSettings>('mocapSettings', { required: true });
 
+// Set by PoseScene3D once it has tried to load the Anny body mesh.
+const bodyStatus = ref<'ready' | 'missing' | null>(null);
+
 // IRIS already rotated the incoming video by bakedRotation; only the leftover delta still needs
 // applying here (0 for camera 0 itself, in the common case).
 function displayRotation(rotation: number): number {
@@ -157,7 +160,7 @@ onBeforeUnmount(() => {
           <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} pose updates/s</span>
         </header>
         <div class="feed mocap-feed">
-          <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" />
+          <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" @body-status="bodyStatus = $event" />
         </div>
       </section>
 
@@ -180,16 +183,32 @@ onBeforeUnmount(() => {
           </div>
 
           <h4 class="settings-subhead">Mocap view</h4>
-          <button class="roi-button" @click="roiOpen = true; refreshRoi()">Capture area</button>
-          <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
+          <div class="view-toggle" role="radiogroup" aria-label="Mocap display">
+            <label>
+              <input type="radio" value="skeleton" v-model="mocapSettings.view" />
+              Skeleton
+            </label>
+            <label>
+              <input type="radio" value="mesh" v-model="mocapSettings.view" :disabled="bodyStatus === 'missing'" />
+              Anny body
+            </label>
+          </div>
+          <p v-if="bodyStatus === 'missing'" class="hint">
+            The Anny body mesh in <code>public/anny/</code> couldn't be loaded. Regenerate it with
+            <code>python scripts/export_anny_mesh.py</code> and reload.
+          </p>
           <label class="field">
             <span>Skeleton length ({{ mocapSettings.scale.toFixed(1) }}x)</span>
             <input type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
           </label>
-          <label class="field">
+          <label v-if="mocapSettings.view === 'skeleton' || bodyStatus === 'missing'" class="field">
             <span>Bone thickness ({{ mocapSettings.boneThickness.toFixed(3) }})</span>
             <input type="range" min="0.006" max="0.03" step="0.002" v-model.number="mocapSettings.boneThickness" />
           </label>
+
+          <h4 class="settings-subhead">Capture area</h4>
+          <button class="roi-button" @click="roiOpen = true; refreshRoi()">Capture area</button>
+          <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
         </div>
       </aside>
     </div>
@@ -287,6 +306,32 @@ onBeforeUnmount(() => {
 
 .field input[type='range'] {
   width: 100%;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: #c7cbd6;
+}
+
+.view-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #e0a951;
+}
+
+.hint code {
+  word-break: break-all;
+  color: #c7cbd6;
 }
 
 .camera-grid {

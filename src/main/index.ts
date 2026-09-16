@@ -40,9 +40,19 @@ function createWindow(): void {
     },
   });
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-  });
+  // 'ready-to-show' fires on the window's first real compositor frame -- normally
+  // near-instant, but it can occasionally never fire at all (seen in practice: a stale
+  // GPU process from a prior un-closed run left contending for the GPU). Windows without
+  // this fallback stay invisible forever with no error anywhere. Force a show after a
+  // few seconds as a backstop; the flag just avoids a harmless double-call to show().
+  let shown = false;
+  const showOnce = (): void => {
+    if (shown || !mainWindow) return;
+    shown = true;
+    mainWindow.show();
+  };
+  mainWindow.once('ready-to-show', showOnce);
+  setTimeout(showOnce, 4000);
 
   if (isDev && devServerUrl) {
     void mainWindow.loadURL(devServerUrl);

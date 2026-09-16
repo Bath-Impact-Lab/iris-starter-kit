@@ -58,7 +58,7 @@ const HAPPY_PATH_STEPS: TourStep[] = [
     target: '[data-tour="live-settings"]',
     position: 'left',
     title: 'Live settings',
-    text: 'Watch FPS/joint tracking here, and adjust skeleton scale and bone thickness to taste.',
+    text: 'Watch FPS/joint tracking here, switch between the skeleton and the Anny body mesh, and adjust scale and bone thickness to taste.',
   },
   {
     id: 'done',

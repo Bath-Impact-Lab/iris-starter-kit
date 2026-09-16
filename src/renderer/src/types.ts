@@ -35,6 +35,8 @@ export interface RunConfig {
 export interface MocapViewSettings {
   scale: number;
   boneThickness: number;
+  // 'mesh' poses the Anny body from public/anny; falls back to the skeleton if that fails to load.
+  view: 'skeleton' | 'mesh';
 }
 
 // Mirrors src/main/iris/rigCalibrationCoordinator.ts's RigCalibrationStatus.
