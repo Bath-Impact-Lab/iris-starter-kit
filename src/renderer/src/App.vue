@@ -164,6 +164,7 @@ async function openIrisPreview() {
     const result = await api.openPreviewMonitor({
       sharedMemoryName: 'iris_shm_ipc',
       cameraCount: cameras.value.length,
+      targetFps: captureSettings(cameras.value).fps,
       cameras: cameras.value.map((cam) => ({
         id: cam.deviceId,
         label: cam.label,

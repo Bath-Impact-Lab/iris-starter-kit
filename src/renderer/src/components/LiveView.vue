@@ -154,7 +154,7 @@ onBeforeUnmount(() => {
       <section class="pane mocap" data-tour="live-mocap">
         <header class="pane-head">
           <span>Live mocap</span>
-          <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} fps</span>
+          <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} pose updates/s</span>
         </header>
         <div class="feed mocap-feed">
           <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" />
@@ -171,7 +171,7 @@ onBeforeUnmount(() => {
             <span class="stat-value">{{ jointsValid }}/{{ jointsTotal }}</span>
           </div>
           <div class="stat">
-            <span class="stat-label">FPS</span>
+            <span class="stat-label" title="Pose updates received by the app per second, not camera capture FPS">Pose updates/s</span>
             <span class="stat-value">{{ fps }}</span>
           </div>
           <div class="stat">

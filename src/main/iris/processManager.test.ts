@@ -52,6 +52,21 @@ function cameraIdsFromLastConfig(writeTempConfigFile: ReturnType<typeof vi.fn>):
 }
 
 describe('ProcessManager camera reconciliation', () => {
+  it.each([[120, 120], [60000 / 1001, 60], [30, 30]])('passes monitor rate %s to Core as %s', async (targetFps, expected) => {
+    const spawnProcess = vi.fn(() => fakeChild());
+    const manager = new ProcessManager({ dependencies: {
+      spawnProcess,
+      pathExists: () => true,
+      getExecutablePath: () => 'C:\\fake\\iris_cli.exe',
+      writeTempConfigFile: () => ({ tmpDir: 'C:\\fake\\tmp', cfgPath: 'C:\\fake\\tmp\\config.json' }),
+      createPipeServer: vi.fn(async () => ({ close: vi.fn() })) as any,
+    } });
+    await manager.startStream({ sessionId: 'rate-test', options: { targetFps } });
+    expect(spawnProcess.mock.calls[0]).toEqual(expect.arrayContaining([
+      expect.arrayContaining(['--fps', String(expected)]),
+    ]));
+  });
+
   it('rechecks stable device paths and remaps reordered native indices at launch', async () => {
     const { manager, writeTempConfigFile } = makeManager({ listCameras: async () => [
       { index: 7, name: 'A', devicePath: 'path-a', modes: [{ width: 1280, height: 720, fpsNumerator: 60, fpsDenominator: 1, format: 'MJPEG' }] },

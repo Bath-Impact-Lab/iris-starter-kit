@@ -571,6 +571,12 @@ export class ProcessManager {
   }
 
   async startStream({ sessionId, options, onCliOutput, onFrame }: ProcessStartOptions) {
+    const requestedFps = options.targetFps ?? captureSettings(options.cameras ?? [], options).fps
+    if (!Number.isFinite(requestedFps) || requestedFps < 1 || requestedFps > 480)
+      throw new Error('Monitor FPS must be between 1 and 480')
+    // Core's monitor accepts integer FPS. Round up so fractional capture rates
+    // are not throttled below their requested rate; capture keeps its exact ratio.
+    const monitorFps = Math.ceil(requestedFps)
     console.log(`[iris:monitor:${sessionId}] Starting stream with options:`, options)
     console.log(`[iris:monitor:${sessionId}] step 1/4 -- resolving iris_cli.exe`)
     const cliPath = this.getExecutablePath()
@@ -595,7 +601,6 @@ export class ProcessManager {
     const shmName: string = options.sharedMemoryName ?? 'iris_shm_ipc'
     const videoPipes: Array<{ cameraIndex: number; pipePath: string }> = options.videoPipes ?? []
     const outputDirectory: string | undefined = options.outputDirectory
-    const targetFps: number | undefined = options.targetFps
 
     let pipeServer: Awaited<ReturnType<typeof createPipeServer>> | null = null
     const videoPipeServers: NetServer[] = []
@@ -623,14 +628,11 @@ export class ProcessManager {
         }
       }
 
-      const args = ['monitor', '--shm-name', shmName, '--pipe', posePipePath]
+      const args = ['monitor', '--shm-name', shmName, '--pipe', posePipePath, '--fps', String(monitorFps)]
       // Writes recording_cam<N>.mp4 per camera for rig calibration capture.
       // Not set during ordinary live preview.
       if (outputDirectory) {
         args.push('--output-dir', outputDirectory)
-      }
-      if (targetFps) {
-        args.push('--fps', String(targetFps))
       }
       for (const vp of videoPipes) {
         args.push('--video-pipe', `${vp.cameraIndex}:${vp.pipePath}`)
