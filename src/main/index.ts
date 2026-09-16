@@ -11,6 +11,11 @@ const isDev = process.env.NODE_ENV === 'development';
 const devServerUrl = process.env.ELECTRON_RENDERER_URL;
 
 let mainWindow: BrowserWindow | null = null;
+let processManager: ProcessManager | null = null;
+let irisStopped = false;
+
+// ProcessManager.stop escalates to SIGKILL after 5.5s; never block quit longer than this.
+const QUIT_STOP_TIMEOUT_MS = 7000;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -53,7 +58,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
 
-  const processManager = new ProcessManager({ runStore: new IrisRunStore(app.getPath('userData')) });
+  processManager = new ProcessManager({ runStore: new IrisRunStore(app.getPath('userData')) });
   registerIpcHandlers(processManager);
   createWindow();
 
@@ -68,4 +73,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', (event) => {
+  if (irisStopped || !processManager) return;
+  event.preventDefault();
+  irisStopped = true;
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, QUIT_STOP_TIMEOUT_MS));
+  Promise.race([processManager.stopAll(), timeout])
+    .catch((error) => console.error('[iris] shutdown failed', error))
+    .finally(() => app.quit());
 });

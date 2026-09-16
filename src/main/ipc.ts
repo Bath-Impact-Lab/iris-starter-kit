@@ -50,10 +50,11 @@ async function listWindowsCameras(): Promise<CameraDevice[]> {
   }
 }
 
-function sendPoseFrame(event: Electron.IpcMainInvokeEvent, frame: unknown) {
-  const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-  if (targetWindow && !targetWindow.isDestroyed()) {
-    targetWindow.webContents.send('iris:pose', frame);
+// IRIS streams keep producing after the requesting window closes, and any use
+// of a destroyed webContents (even BrowserWindow.fromWebContents) throws.
+function sendToSender(sender: Electron.WebContents, channel: string, payload: unknown) {
+  if (!sender.isDestroyed()) {
+    sender.send(channel, payload);
   }
 }
 
@@ -152,7 +153,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   });
 
   ipcMain.handle('iris:open-preview-monitor', async (event, input = {}) => {
-    const { videoStreams } = await processManager.openPreviewMonitor(input, (frame) => sendPoseFrame(event, frame));
+    const { videoStreams } = await processManager.openPreviewMonitor(input, (frame) => sendToSender(event.sender, 'iris:pose', frame));
     return { ...processManager.getStatus(), videoStreams };
   });
 
@@ -171,13 +172,8 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     const result = await processManager.startStream({
       sessionId: runId,
       options,
-      onCliOutput: (payload) => {
-        const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-        if (targetWindow && !targetWindow.isDestroyed()) {
-          targetWindow.webContents.send('iris:cli-output', payload);
-        }
-      },
-      onFrame: (frame) => sendPoseFrame(event, frame),
+      onCliOutput: (payload) => sendToSender(event.sender, 'iris:cli-output', payload),
+      onFrame: (frame) => sendToSender(event.sender, 'iris:pose', frame),
     });
 
     return result;

@@ -717,7 +717,7 @@ export class ProcessManager {
       const child = entry.child
       let settled = false
 
-      child.once('exit', () => {
+      const onExit = () => {
         if (settled) return
         settled = true
         console.log(`[iris:${sessionId}] stopped`)
@@ -726,7 +726,13 @@ export class ProcessManager {
           void this.runStore?.update(sessionId, { state: 'stopped' })
         }
         resolve({ ok: true, sessionId })
-      })
+      }
+
+      if (child.exitCode !== null || child.signalCode !== null) {
+        onExit()
+        return
+      }
+      child.once('exit', onExit)
 
       // Monitor sessions support a graceful "stop\n" over stdin, so mp4
       // files get finalized properly. Escalate to signals if it hangs.

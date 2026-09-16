@@ -9,6 +9,13 @@ function fakeChild() {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 1234;
+  // Like a real ChildProcess, record how it exited before other 'exit' listeners run.
+  child.exitCode = null;
+  child.signalCode = null;
+  child.on('exit', (code: number | null, signal: string | null) => {
+    child.exitCode = code;
+    child.signalCode = signal;
+  });
   child.stdin = { writable: true, write: vi.fn() };
   child.kill = vi.fn((signal: string) => {
     child.emit('exit', null, signal);
@@ -283,4 +290,17 @@ describe('ProcessManager graceful monitor shutdown', () => {
       vi.useRealTimers();
     }
   });
+
+  // 'exit' only fires once, so waiting for it after a crash would hang app quit.
+  it('stops a session whose process already exited', async () => {
+    const child = fakeChild();
+    const { manager } = makeManager({ spawnProcess: () => child });
+    await manager.startRun({ run_id: 'crashed', cameras: twoConfiguredCameras });
+
+    child.emit('exit', 1, null);
+    child.kill = vi.fn();
+
+    await manager.stopAll();
+    expect(child.kill).not.toHaveBeenCalled();
+  }, 1000);
 });
