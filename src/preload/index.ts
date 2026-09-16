@@ -47,6 +47,20 @@ const irisApi = {
     ipcRenderer.on('iris:cli-output', handler);
     return () => ipcRenderer.removeListener('iris:cli-output', handler);
   },
+  getRigCalibrationStatus: () => ipcRenderer.invoke('calibration:get-status'),
+  beginRigCalibrationCapture: (input: { cameraCount: number; targetFps?: number }) =>
+    ipcRenderer.invoke('calibration:begin-capture', input),
+  // `cameras` here is the same { id, ... } shape startRun's payload uses
+  // (App.vue maps CameraConfig.deviceId -> id before calling either) --
+  // the fingerprint that decides whether a published calibration still
+  // matches the rig has to be computed from identical input both times.
+  finishRigCalibrationCapture: (input: {
+    cameras: Array<{ id: string; label?: string; resolution?: string; fps?: number; rotation?: number }>;
+    rotation?: number;
+    markerSizeMm?: number;
+    markerId?: number;
+  }) => ipcRenderer.invoke('calibration:finish-capture', input),
+  cancelRigCalibrationCapture: () => ipcRenderer.invoke('calibration:cancel-capture'),
 };
 
 contextBridge.exposeInMainWorld('irisStarter', irisApi);

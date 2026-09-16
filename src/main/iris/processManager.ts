@@ -98,6 +98,10 @@ export interface StartIrisRunInput {
   camera_height?: number
   video_fps?: number
   cameras?: Array<{ id: string | number; label?: string; resolution?: string; fps?: number; rotation?: number }>
+  // A published rig calibration's extrinsics.json (see
+  // rigCalibrationCoordinator.ts) for the currently configured cameras --
+  // when set, triangulation uses it instead of da3_startup_calibration.
+  extrinsics_file?: string
 }
 
 export interface OpenIrisMonitorInput {
@@ -272,6 +276,7 @@ export class ProcessManager {
         cameras,
         verbose: input.verbose ?? false,
         profileFile: input.profileFile,
+        extrinsics_file: input.extrinsics_file,
       },
       onCliOutput: (payload) => console.log(`[iris:${runId}] ${payload.channel}`, payload.line),
     })
@@ -333,7 +338,8 @@ export class ProcessManager {
     const monitorOptions = {
       ...input,
       sharedMemoryName: input.sharedMemoryName ?? 'iris_shm_ipc',
-      outputDirectory: input.outputDirectory ?? process.cwd(),
+      // No default here: outputDirectory now reaches --output-dir, and a
+      // default would make every live-preview session start recording too.
       posePipePath: input.posePipePath ?? this.pipeName,
       videoPipes,
       verbose: input.verbose ?? false,
@@ -472,6 +478,8 @@ export class ProcessManager {
     const posePipePath: string = options.posePipePath ?? this.pipeName
     const shmName: string = options.sharedMemoryName ?? 'iris_shm_ipc'
     const videoPipes: Array<{ cameraIndex: number; pipePath: string }> = options.videoPipes ?? []
+    const outputDirectory: string | undefined = options.outputDirectory
+    const targetFps: number | undefined = options.targetFps
 
     let pipeServer: Awaited<ReturnType<typeof createPipeServer>> | null = null
     const videoPipeServers: NetServer[] = []
@@ -500,13 +508,24 @@ export class ProcessManager {
       }
 
       const args = ['monitor', '--shm-name', shmName, '--pipe', posePipePath]
+      // Writes recording_cam<N>.mp4 per camera for rig calibration capture.
+      // Not set during ordinary live preview.
+      if (outputDirectory) {
+        args.push('--output-dir', outputDirectory)
+      }
+      if (targetFps) {
+        args.push('--fps', String(targetFps))
+      }
       for (const vp of videoPipes) {
         args.push('--video-pipe', `${vp.cameraIndex}:${vp.pipePath}`)
       }
       console.log(`[iris:monitor:${sessionId}] step 3/4 -- spawning "iris_cli ${args.join(' ')}"`)
       const child = this.spawnProcess(cliPath, args, {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // Real pipe (not 'ignore') so stop() can send "stop\n", monitor.cpp's
+        // graceful shutdown channel. Killing it (SIGTERM is a hard kill on
+        // Windows) leaves recording_cam<N>.mp4 without its trailer.
+        stdio: ['pipe', 'pipe', 'pipe'],
       })
       console.log(`[iris:monitor:${sessionId}] step 3/4 done -- pid ${child.pid}; watching stdout for shared-memory attach`)
       console.log(`[iris:monitor:${sessionId}] step 4/4 -- waiting to attach to shared memory "${shmName}" (requires a "run" process already producing frames)`)
@@ -564,11 +583,13 @@ export class ProcessManager {
       return entry.stopPromise
     }
 
-    console.log(`[iris:${sessionId}] stopping -- sending SIGTERM (pid ${entry.child.pid}), SIGKILL after 2500ms if still alive`)
     entry.stopPromise = new Promise((resolve) => {
       const child = entry.child
+      let settled = false
 
       child.once('exit', () => {
+        if (settled) return
+        settled = true
         console.log(`[iris:${sessionId}] stopped`)
         this.workers.delete(sessionId)
         if (entry.isRun) {
@@ -577,14 +598,34 @@ export class ProcessManager {
         resolve({ ok: true, sessionId })
       })
 
-      child.kill('SIGTERM')
+      // Monitor sessions support a graceful "stop\n" over stdin, so mp4
+      // files get finalized properly. Escalate to signals if it hangs.
+      // `run` has no such channel, so it goes straight to signals.
+      if (!entry.isRun && child.stdin?.writable) {
+        console.log(`[iris:${sessionId}] stopping -- writing "stop" to stdin (pid ${child.pid}), SIGTERM after 3000ms if still alive`)
+        child.stdin.write('stop\n')
 
-      setTimeout(() => {
-        if (!child.killed) {
+        setTimeout(() => {
+          if (settled) return
+          console.log(`[iris:${sessionId}] still alive after 3000ms -- sending SIGTERM`)
+          child.kill('SIGTERM')
+        }, 3000)
+
+        setTimeout(() => {
+          if (settled) return
+          console.log(`[iris:${sessionId}] still alive -- sending SIGKILL`)
+          child.kill('SIGKILL')
+        }, 5500)
+      } else {
+        console.log(`[iris:${sessionId}] stopping -- sending SIGTERM (pid ${child.pid}), SIGKILL after 2500ms if still alive`)
+        child.kill('SIGTERM')
+
+        setTimeout(() => {
+          if (settled) return
           console.log(`[iris:${sessionId}] still alive after 2500ms -- sending SIGKILL`)
           child.kill('SIGKILL')
-        }
-      }, 2500)
+        }, 2500)
+      }
     })
 
     return entry.stopPromise

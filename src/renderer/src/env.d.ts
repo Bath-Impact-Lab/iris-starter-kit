@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { CameraDevice, RunConfig } from './types';
+import type { CameraDevice, RigCalibrationStatus, RunConfig } from './types';
 
 interface IrisStarterApi {
   version: string;
@@ -17,6 +17,15 @@ interface IrisStarterApi {
   stopAll: () => Promise<any>;
   onPoseData: (callback: (frame: unknown) => void) => () => void;
   onCliOutput: (callback: (payload: { channel: string; line: string }) => void) => () => void;
+  getRigCalibrationStatus: () => Promise<RigCalibrationStatus>;
+  beginRigCalibrationCapture: (input: { cameraCount: number; targetFps?: number }) => Promise<RigCalibrationStatus>;
+  finishRigCalibrationCapture: (input: {
+    cameras: Array<{ id: string; label?: string; resolution?: string; fps?: number; rotation?: number }>;
+    rotation?: number;
+    markerSizeMm?: number;
+    markerId?: number;
+  }) => Promise<RigCalibrationStatus>;
+  cancelRigCalibrationCapture: () => Promise<RigCalibrationStatus>;
 }
 
 declare global {

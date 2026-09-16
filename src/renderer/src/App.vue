@@ -4,6 +4,7 @@ import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, VideoStreamD
 import { BODY_JOINT_COUNT, countValidKeypoints, extractBodyKeypoints2D } from './utils/pose';
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
+import RigCalibrationModal from './components/RigCalibrationModal.vue';
 import LiveView from './components/LiveView.vue';
 import TourOverlay from './components/TourOverlay.vue';
 import { useTour } from './tutorial/useTour';
@@ -15,6 +16,7 @@ const calibrationOpen = ref(false);
 // Bumped on each (re)start so CalibrationModal remounts instead of reusing a stale 'done' status.
 const calibrationSessionId = ref(0);
 const settingsOpen = ref(false);
+const rigCalibrationOpen = ref(false);
 
 const tour = useTour();
 tour.syncToPhase(phase);
@@ -260,6 +262,16 @@ function onCalibrationClose() {
   }
 }
 
+function onRigCalibrationClose() {
+  rigCalibrationOpen.value = false;
+
+  // Rig calibration recording also steals the shared monitor pipe, so
+  // reclaim it the same way onCalibrationClose does.
+  if (phase.value === 'live') {
+    void openIrisPreview();
+  }
+}
+
 function reopenSetup() {
   settingsOpen.value = false;
   cameraSetupOpen.value = true;
@@ -269,6 +281,11 @@ function reopenCalibration() {
   settingsOpen.value = false;
   calibrationSessionId.value += 1; // always start a fresh attempt
   calibrationOpen.value = true;
+}
+
+function openRigCalibration() {
+  settingsOpen.value = false;
+  rigCalibrationOpen.value = true;
 }
 
 function replayTour() {
@@ -345,12 +362,22 @@ function replayTour() {
       @complete="onCalibrationComplete"
       @close="onCalibrationClose"
     />
+    <RigCalibrationModal :open="rigCalibrationOpen" :cameras="cameras" @close="onRigCalibrationClose" />
 
     <div v-if="settingsOpen" class="settings" @click.self="settingsOpen = false">
       <div class="settings-panel">
         <h3>Settings</h3>
         <button type="button" class="btn" @click="reopenSetup">Camera setup</button>
         <button type="button" class="btn" @click="reopenCalibration">Re-calibrate</button>
+        <button
+          type="button"
+          class="btn"
+          :disabled="phase !== 'live'"
+          :title="phase !== 'live' ? 'Finish camera setup and calibration first' : ''"
+          @click="openRigCalibration"
+        >
+          Rig calibration (ArUco marker)
+        </button>
         <button type="button" class="btn" @click="replayTour">Take the tour</button>
         <button type="button" class="btn ghost" @click="settingsOpen = false">Close</button>
       </div>
@@ -508,7 +535,12 @@ function replayTour() {
   margin-top: 8px;
 }
 
-.btn:hover {
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn:hover:not(:disabled) {
   background: #252b38;
 }
 </style>

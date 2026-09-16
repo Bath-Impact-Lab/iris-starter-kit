@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ProcessManager } from './iris/processManager.js';
+import { resolveCaptureRotation } from './iris/config.js';
+import { RigCalibrationCoordinator } from './iris/rigCalibrationCoordinator.js';
+import { createProcessManagerRigCalibrationRuntime } from './iris/rigCalibrationRuntime.js';
+import { computeCameraFingerprint } from './iris/rigCalibrationStore.js';
 
 const execFileAsync = promisify(execFile);
 interface CameraDevice {
@@ -58,7 +62,16 @@ function emitStatusToAllWindows(processManager: ProcessManager) {
   }
 }
 
+function cameraFingerprintFor(input: { cameras?: unknown[]; rotation?: unknown }): string {
+  const cameras = Array.isArray(input.cameras) ? (input.cameras as any[]) : [];
+  return computeCameraFingerprint({ cameras, rotation: resolveCaptureRotation({ rotation: input.rotation, cameras }) });
+}
+
 export function registerIpcHandlers(processManager: ProcessManager): void {
+  const rigCalibration = new RigCalibrationCoordinator({
+    runtime: createProcessManagerRigCalibrationRuntime(processManager),
+  });
+
   processManager.subscribe((status) => {
     emitStatusToAllWindows(processManager);
     console.log('[iris-dispatcher] status ->', status);
@@ -69,7 +82,13 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   ipcMain.handle('iris:get-status', () => processManager.getStatus());
 
   ipcMain.handle('iris:start-run', async (_event, input = {}) => {
-    const result = await processManager.startRun(input);
+    // A published calibration for this exact camera setup takes over from
+    // live auto-calibration. Otherwise falls back to today's behavior.
+    const extrinsicsFile = rigCalibration.resolveExtrinsicsFile(cameraFingerprintFor(input));
+    const result = await processManager.startRun({
+      ...input,
+      ...(extrinsicsFile ? { extrinsics_file: extrinsicsFile } : {}),
+    });
     return {
       ok: result.ok,
       runId: result.runId,
@@ -79,6 +98,29 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
       failed: result.failed,
       error: result.error,
     };
+  });
+
+  ipcMain.handle('calibration:get-status', () => rigCalibration.getStatus());
+
+  ipcMain.handle('calibration:begin-capture', async (_event, input: { cameraCount?: number; targetFps?: number } = {}) => {
+    await rigCalibration.beginCapture(Number(input.cameraCount ?? 0), input.targetFps);
+    return rigCalibration.getStatus();
+  });
+
+  ipcMain.handle(
+    'calibration:finish-capture',
+    async (_event, input: { cameras?: unknown[]; rotation?: unknown; markerSizeMm?: number; markerId?: number } = {}) => {
+      return rigCalibration.finishCapture({
+        fingerprint: cameraFingerprintFor(input),
+        markerSizeMm: input.markerSizeMm,
+        markerId: input.markerId,
+      });
+    },
+  );
+
+  ipcMain.handle('calibration:cancel-capture', async () => {
+    await rigCalibration.cancelCapture();
+    return rigCalibration.getStatus();
   });
 
   ipcMain.handle('iris:open-preview-monitor', async (event, input = {}) => {

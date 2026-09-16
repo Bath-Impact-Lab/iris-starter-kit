@@ -31,6 +31,22 @@ describe('config', () => {
     expect('calibration' in config.pipeline).toBe(false);
   });
 
+  it('buildConfigFromOptions swaps in calibration_dir/extrinsics_file when a published extrinsics file is passed', () => {
+    const config = buildConfigFromOptions({
+      run_id: 'test-run',
+      cameras: [{ id: '0' }, { id: '1' }],
+      extrinsics_file: 'C:\\Users\\test\\AppData\\Roaming\\ReCapture\\rig_calibration\\active\\extrinsics.json',
+    });
+
+    expect(config.pipeline.triangulation.extrinsics_file).toBe(
+      'C:/Users/test/AppData/Roaming/ReCapture/rig_calibration/active/extrinsics.json',
+    );
+    expect(config.pipeline.triangulation.calibration_dir).toBe(
+      'C:/Users/test/AppData/Roaming/ReCapture/rig_calibration/active',
+    );
+    expect('da3_startup_calibration' in config.pipeline.triangulation).toBe(false);
+  });
+
   it('ProcessManager exposes a minimal dispatcher lifecycle status', () => {
     const manager = new ProcessManager();
     const status = manager.getStatus();

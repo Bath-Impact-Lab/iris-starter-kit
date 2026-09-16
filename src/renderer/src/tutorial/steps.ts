@@ -1,9 +1,9 @@
-import type { TourStep } from './types';
+import type { TourDefinition, TourStep } from './types';
 
 // The happy-path tour: camera setup -> calibration -> live view. Linear, no
 // branches -- each step names the phase it belongs to so the tour can follow
 // the app there automatically (see useTour's syncToPhase).
-export const HAPPY_PATH_TOUR: TourStep[] = [
+const HAPPY_PATH_STEPS: TourStep[] = [
   {
     id: 'welcome',
     phase: 'camera-setup',
@@ -67,3 +67,75 @@ export const HAPPY_PATH_TOUR: TourStep[] = [
     text: 'Reopen this tour anytime from the settings gear.',
   },
 ];
+
+export const HAPPY_PATH_TOUR: TourDefinition = { id: 'happy-path', steps: HAPPY_PATH_STEPS };
+
+// Scoped to RigCalibrationModal's own step values, not AppPhase, since the
+// modal opens as an overlay without the app changing phase. No 'failed'
+// step; the modal's own error text covers it (see useTour.skip() there).
+const RIG_CALIBRATION_STEPS: TourStep[] = [
+  {
+    id: 'rig-intro',
+    phase: 'setup',
+    title: 'ArUco rig calibration',
+    text: "This calibrates your cameras to real-world units using a printed marker, instead of the automatic (but relative-scale-only) calibration. If it can't get a clean reading, it safely falls back to standard auto-calibration so calibration still completes.",
+  },
+  {
+    id: 'rig-howto',
+    phase: 'setup',
+    target: '[data-tour="rig-howto"]',
+    position: 'bottom',
+    title: 'Print the marker',
+    text: 'Print a DICT_6X6_250 ArUco marker at a precisely known size, then follow these steps for how to hold it during recording.',
+  },
+  {
+    id: 'rig-marker-fields',
+    phase: 'setup',
+    target: '[data-tour="rig-marker-fields"]',
+    position: 'bottom',
+    title: 'Marker size & ID',
+    text: "Enter the marker's actual printed size (measure it, this defines your real-world scale) and its ID.",
+  },
+  {
+    id: 'rig-start',
+    phase: 'setup',
+    target: '[data-tour="rig-start"]',
+    position: 'top',
+    title: 'Start recording',
+    text: 'Click Start recording once your marker is printed and ready.',
+    autoAdvance: true,
+  },
+  {
+    id: 'rig-feeds',
+    phase: 'recording',
+    target: '[data-tour="rig-camera-grid"]',
+    position: 'top',
+    title: 'Watch both feeds',
+    text: 'Hold the marker completely still for 3+ seconds at a time, somewhere visible in every feed here, at a few different positions.',
+  },
+  {
+    id: 'rig-stop',
+    phase: 'recording',
+    target: '[data-tour="rig-stop"]',
+    position: 'top',
+    title: 'Stop & calibrate',
+    text: "Click this once you've held the marker still at a few good positions.",
+    autoAdvance: true,
+  },
+  {
+    id: 'rig-calibrating',
+    phase: 'calibrating',
+    title: 'Calibrating…',
+    text: 'Running ArUco detection, then falling back to standard auto-calibration if needed. Only takes a few seconds.',
+  },
+  {
+    id: 'rig-done',
+    phase: 'ready',
+    target: '[data-tour="rig-stats"]',
+    position: 'top',
+    title: 'Result',
+    text: "This calibration is now published, and used automatically the next time you start a run with this exact camera setup.",
+  },
+];
+
+export const RIG_CALIBRATION_TOUR: TourDefinition = { id: 'rig-calibration', steps: RIG_CALIBRATION_STEPS };
