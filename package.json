@@ -12,10 +12,13 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "vue-tsc --noEmit && electron-vite build",
+    "test:roi": "vitest run src/main/iris/roiClient.test.ts src/main/iris/roiStore.test.ts src/main/iris/da3Scene.test.ts src/renderer/src/utils/roiGeometry.test.ts",
+    "build": "npm run typecheck && electron-vite build",
+    "test": "vitest run",
     "test:iris": "vitest run src/main/iris",
+    "test:cameras": "vitest run src/main/iris/config.test.ts src/main/iris/processManager.test.ts src/renderer/src/utils/camera-probe.test.ts",
     "preview": "electron-vite preview",
-    "typecheck": "vue-tsc --noEmit",
+    "typecheck": "vue-tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "package": "npm run build && electron-builder --win"
   },
   "dependencies": {
@@ -24,6 +27,7 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@types/three": "^0.185.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "electron": "^34.0.2",
