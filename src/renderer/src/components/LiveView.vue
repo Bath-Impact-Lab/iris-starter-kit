@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from '../types';
 import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import PoseScene3D from './PoseScene3D.vue';
+import CaptureAreaWorkspace from './CaptureAreaWorkspace.vue';
+import type { RoiState, SavedRoi } from '../../../shared/roi';
 
 const props = defineProps<{
   cameras: CameraConfig[];
@@ -34,6 +36,31 @@ function isPortrait(rotation: number): boolean {
 const canvasElements = new Map<number, HTMLCanvasElement>();
 const decoders = new Map<number, H264AnnexBDecoder>();
 const decoderUrls = new Map<number, string>();
+const lastVideoFrame = new Map<number, number>();
+const roiOpen = ref(false);
+const roiState = ref<RoiState | null>(null);
+const savedRoi = ref<SavedRoi | null>(null);
+const roiError = ref('');
+let pollingRoi = false;
+let disposed = false;
+let roiTimer: ReturnType<typeof setInterval>;
+async function refreshRoi() {
+  if (pollingRoi || !window.irisStarter?.roiGet) return;
+  pollingRoi = true;
+  try {
+    const reply = await window.irisStarter.roiGet();
+    if (disposed) return;
+    roiState.value = reply.ok ? reply.state ?? null : null;
+    savedRoi.value = reply.saved ?? null;
+    roiError.value = reply.ok ? '' : reply.error ?? 'Capture area is unavailable';
+  } catch (error) { if (!disposed) { roiState.value = null; roiError.value = String(error); } }
+  finally { pollingRoi = false; }
+}
+function getRoiFrame(streamId: number) {
+  return hasStream(streamId) && Date.now() - (lastVideoFrame.get(streamId) ?? 0) < 3000 ? canvasElements.get(streamId) : undefined;
+}
+function roiRotation(streamId: number) { return displayRotation(props.cameras[streamId]?.rotation ?? props.bakedRotation); }
+onMounted(() => { void refreshRoi(); roiTimer = setInterval(() => void refreshRoi(), 1500); });
 const failedStreams = ref<Set<number>>(new Set());
 
 function streamUrlFor(cameraId: number): string | null {
@@ -70,6 +97,7 @@ function attachDecoder(cameraId: number): void {
           canvas.height = frame.displayHeight;
         }
         canvas.getContext('2d')?.drawImage(frame, 0, 0);
+        lastVideoFrame.set(cameraId, Date.now());
       }
       frame.close();
     },
@@ -87,8 +115,8 @@ function attachDecoder(cameraId: number): void {
 }
 
 function setVideoRef(cameraId: number) {
-  return (el: HTMLCanvasElement | null) => {
-    if (el) {
+  return (el: unknown) => {
+    if (el instanceof HTMLCanvasElement) {
       canvasElements.set(cameraId, el);
       attachDecoder(cameraId);
     } else {
@@ -113,6 +141,8 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  disposed = true;
+  clearInterval(roiTimer);
   for (const cameraId of [...decoders.keys()]) detachDecoder(cameraId);
 });
 
@@ -120,14 +150,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="live">
-    <div class="top-row">
+    <div v-show="!roiOpen" class="top-row">
       <section class="pane mocap" data-tour="live-mocap">
         <header class="pane-head">
           <span>Live mocap</span>
-          <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} fps</span>
+          <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} pose updates/s</span>
         </header>
         <div class="feed mocap-feed">
-          <PoseScene3D :pose="pose" :settings="mocapSettings" />
+          <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" />
         </div>
       </section>
 
@@ -141,7 +171,7 @@ onBeforeUnmount(() => {
             <span class="stat-value">{{ jointsValid }}/{{ jointsTotal }}</span>
           </div>
           <div class="stat">
-            <span class="stat-label">FPS</span>
+            <span class="stat-label" title="Pose updates received by the app per second, not camera capture FPS">Pose updates/s</span>
             <span class="stat-value">{{ fps }}</span>
           </div>
           <div class="stat">
@@ -150,6 +180,8 @@ onBeforeUnmount(() => {
           </div>
 
           <h4 class="settings-subhead">Mocap view</h4>
+          <button class="roi-button" @click="roiOpen = true; refreshRoi()">Capture area</button>
+          <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
           <label class="field">
             <span>Skeleton length ({{ mocapSettings.scale.toFixed(1) }}x)</span>
             <input type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
@@ -162,7 +194,7 @@ onBeforeUnmount(() => {
       </aside>
     </div>
 
-    <div class="camera-grid">
+    <div v-show="!roiOpen" class="camera-grid">
       <section v-for="(cam, index) in cameras" :key="cam.deviceId" class="pane camera-pane">
         <header class="pane-head">
           <span>{{ cam.label }}</span>
@@ -181,6 +213,8 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+    <CaptureAreaWorkspace v-if="roiOpen" :state="roiState" :saved="savedRoi" :error="roiError" :get-frame="getRoiFrame"
+      :rotation-for="roiRotation" @close="roiOpen = false" @refresh="refreshRoi" @applied="roiState = $event" />
   </div>
 </template>
 
@@ -360,6 +394,7 @@ onBeforeUnmount(() => {
   object-fit: contain;
   background: #0a0c10;
 }
+.roi-button { padding: 9px 12px; background: #263650; color: #eef4ff; border: 1px solid #526784; border-radius: 5px; }
 
 .mocap-feed {
   background: radial-gradient(ellipse at center, #151a24 0%, #0a0c10 70%);

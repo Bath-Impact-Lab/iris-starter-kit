@@ -1,4 +1,8 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { listPoseModels, validatePoseModel } from './iris/poseModels';
+import { ipcMain, BrowserWindow, app } from 'electron';
+import path from 'node:path';
+import { RoiStore } from './iris/roiStore.js';
+import type { RoiEdit, SceneKey } from '../shared/roi';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -46,11 +50,30 @@ async function listWindowsCameras(): Promise<CameraDevice[]> {
   }
 }
 
-function sendPoseFrame(event: Electron.IpcMainInvokeEvent, frame: unknown) {
-  const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-  if (targetWindow && !targetWindow.isDestroyed()) {
-    targetWindow.webContents.send('iris:pose', frame);
+// IRIS streams keep producing after the requesting window closes, and any use
+// of a destroyed webContents (even BrowserWindow.fromWebContents) throws.
+function sendToSender(sender: Electron.WebContents, channel: string, payload: unknown) {
+  if (!sender.isDestroyed()) {
+    sender.send(channel, payload);
   }
+}
+
+// Pose frames arrive in bursts (several JSON lines per pipe read), and
+// webContents.send has no backpressure. Sending only the newest frame of each
+// burst keeps the renderer from queueing frames it would never display.
+function latestFrameSender(sender: Electron.WebContents, channel: string) {
+  let latest: unknown;
+  let scheduled = false;
+  return (frame: unknown) => {
+    latest = frame;
+    if (scheduled) return;
+    scheduled = true;
+    setImmediate(() => {
+      scheduled = false;
+      sendToSender(sender, channel, latest);
+      latest = undefined;
+    });
+  };
 }
 
 function emitStatusToAllWindows(processManager: ProcessManager) {
@@ -72,6 +95,27 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     runtime: createProcessManagerRigCalibrationRuntime(processManager),
   });
 
+  ipcMain.handle('pose-models:list', () => listPoseModels());
+  ipcMain.handle('pose-models:validate', (_event, id: unknown) => {
+    validatePoseModel(id);
+  });
+
+  ipcMain.handle('cameras:capture', () => processManager.getCaptureCameras());
+
+  const roiStore = new RoiStore(path.join(app.getPath('userData'), 'capture-area.json'));
+  let savedRoi = roiStore.load();
+  ipcMain.handle('roi:get', async () => ({ ...await processManager.roiRequest('roi.get'), saved: savedRoi }));
+  ipcMain.handle('roi:preview', async (_event, edit: RoiEdit) => processManager.roiRequest('roi.preview', edit));
+  ipcMain.handle('roi:scene', async (_event, key: SceneKey) => processManager.roiScene(key));
+  ipcMain.handle('roi:apply', async (_event, edit: RoiEdit) => {
+    const result = await processManager.roiRequest('roi.apply', edit);
+    if (result.ok && result.state) {
+      try { savedRoi = roiStore.save(result.state); }
+      catch (error) { result.saveError = `Applied, but could not save: ${String(error)}`; }
+    }
+    return result;
+  });
+
   processManager.subscribe((status) => {
     emitStatusToAllWindows(processManager);
     console.log('[iris-dispatcher] status ->', status);
@@ -82,12 +126,15 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   ipcMain.handle('iris:get-status', () => processManager.getStatus());
 
   ipcMain.handle('iris:start-run', async (_event, input = {}) => {
+    try { validatePoseModel(input.pose_model); }
+    catch (error) { return { ok: false, error: String(error instanceof Error ? error.message : error) }; }
     // A published calibration for this exact camera setup takes over from
     // live auto-calibration. Otherwise falls back to today's behavior.
     const extrinsicsFile = rigCalibration.resolveExtrinsicsFile(cameraFingerprintFor(input));
     const result = await processManager.startRun({
       ...input,
       ...(extrinsicsFile ? { extrinsics_file: extrinsicsFile } : {}),
+      roi_mode: 'off',
     });
     return {
       ok: result.ok,
@@ -124,7 +171,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   });
 
   ipcMain.handle('iris:open-preview-monitor', async (event, input = {}) => {
-    const { videoStreams } = await processManager.openPreviewMonitor(input, (frame) => sendPoseFrame(event, frame));
+    const { videoStreams } = await processManager.openPreviewMonitor(input, latestFrameSender(event.sender, 'iris:pose'));
     return { ...processManager.getStatus(), videoStreams };
   });
 
@@ -143,13 +190,8 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     const result = await processManager.startStream({
       sessionId: runId,
       options,
-      onCliOutput: (payload) => {
-        const targetWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
-        if (targetWindow && !targetWindow.isDestroyed()) {
-          targetWindow.webContents.send('iris:cli-output', payload);
-        }
-      },
-      onFrame: (frame) => sendPoseFrame(event, frame),
+      onCliOutput: (payload) => sendToSender(event.sender, 'iris:cli-output', payload),
+      onFrame: latestFrameSender(event.sender, 'iris:pose'),
     });
 
     return result;

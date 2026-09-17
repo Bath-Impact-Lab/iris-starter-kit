@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
+import { captureSettings, modeFps, type NegotiatedCapture } from '../../shared/capture';
 import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from './types';
-import { BODY_JOINT_COUNT, countValidKeypoints, extractBodyKeypoints2D } from './utils/pose';
+import { countValidKeypoints, extractKeypoints2D } from './utils/pose';
+import { DEFAULT_POSE_MODEL, poseModel, type PoseModelId, type PoseModelAvailability } from '../../shared/poseModels';
+import PoseModelSelect from './components/PoseModelSelect.vue';
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
 import RigCalibrationModal from './components/RigCalibrationModal.vue';
@@ -20,6 +23,55 @@ const rigCalibrationOpen = ref(false);
 
 const tour = useTour();
 tour.syncToPhase(phase);
+
+function loadPoseModel(): PoseModelId {
+  try { return poseModel(localStorage.getItem('pose-model') ?? DEFAULT_POSE_MODEL).id; }
+  catch { return DEFAULT_POSE_MODEL; }
+}
+const selectedPoseModel = ref<PoseModelId>(loadPoseModel());
+const activePoseModel = ref<PoseModelId | null>(null);
+const activeRunId = ref<string | null>(null);
+const poseModels = ref<PoseModelAvailability[]>([]);
+const modelBusy = ref(false);
+const modelError = ref('');
+const modelAvailable = computed(() => poseModels.value.some(model => model.id === selectedPoseModel.value && model.available));
+
+async function refreshPoseModels() {
+  try { poseModels.value = await getIrisApi()?.listPoseModels() ?? []; }
+  catch { modelError.value = 'Could not check installed pose models.'; }
+}
+
+async function validateSelectedModel() {
+  modelError.value = '';
+  try {
+    const api = getIrisApi();
+    if (!api?.validatePoseModel) throw new Error('Pose model selection requires the IRIS backend.');
+    await api.validatePoseModel(selectedPoseModel.value);
+    return true;
+  } catch (error) {
+    modelError.value = error instanceof Error ? error.message : String(error);
+    await refreshPoseModels();
+    return false;
+  }
+}
+
+async function applyPoseModel() {
+  if (modelBusy.value) return;
+  modelBusy.value = true;
+  try {
+    if (!await validateSelectedModel()) return;
+    if (phase.value === 'camera-setup') return;
+    await getIrisApi().stopAll();
+    settingsOpen.value = false;
+    phase.value = 'calibration';
+    calibrationSessionId.value += 1;
+    calibrationOpen.value = true;
+    await startIrisRun(cameras.value);
+  } catch (error) {
+    modelError.value = error instanceof Error ? error.message : String(error);
+  } finally { modelBusy.value = false; }
+}
+watch(settingsOpen, open => { if (open) { selectedPoseModel.value = activePoseModel.value ?? loadPoseModel(); void refreshPoseModels(); } });
 
 const DEFAULT_MOCAP_SETTINGS: MocapViewSettings = {
   scale: 1.3,
@@ -48,13 +100,20 @@ watch(
   { deep: true },
 );
 const liveFps = ref(0);
-const liveJoints = ref({ valid: 0, total: BODY_JOINT_COUNT });
-const livePose = ref<PoseFrame | null>(null);
+const liveJoints = ref<{ valid: number; total: number }>({ valid: 0, total: poseModel(selectedPoseModel.value).keypoints });
+// Shallow: a pose frame is replaced wholesale and never mutated, so deep
+// reactive proxies over every joint would be pure overhead.
+const livePose = shallowRef<PoseFrame | null>(null);
 const videoStreams = ref<VideoStreamDescriptor[]>([]);
 // IRIS bakes camera 0's rotation into the raw capture before anything else touches it, so the
 // video we receive already reflects whatever this was set to at the last real run start -- not
 // necessarily cameras.value[0].rotation right now, since a rotation-only edit skips a restart.
 const bakedRotation = ref(0);
+const negotiatedCapture = ref<NegotiatedCapture[]>([]);
+const captureError = ref('');
+const captureDescription = computed(() => negotiatedCapture.value.length ? negotiatedCapture.value.map(c =>
+  `Camera ${c.cameraId + 1}: ${c.width}x${c.height} at ${Number(modeFps(c).toFixed(3))} FPS`).join(' · ') :
+  'Capture settings awaiting confirmation from IRIS.');
 let removePoseListener: (() => void) | null = null;
 
 function getIrisApi(): any {
@@ -62,7 +121,7 @@ function getIrisApi(): any {
 }
 
 function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number; total: number } {
-  return { valid: countValidKeypoints(extractBodyKeypoints2D(frame)), total: BODY_JOINT_COUNT };
+  return { valid: countValidKeypoints(extractKeypoints2D(frame)), total: poseModel(frame?.pose_model).keypoints };
 }
 
 // Rolling count of pose frames received in the last second -- an honest
@@ -79,11 +138,14 @@ function recordFrameArrival(): number {
 
 onMounted(() => {
   const api = getIrisApi();
+  void refreshPoseModels();
 
   if (api?.onPoseData) {
     removePoseListener = api.onPoseData((frame: unknown) => {
-      livePose.value = (frame as PoseFrame) ?? null;
-      liveJoints.value = extractPoseCount(livePose.value);
+      const incoming = frame as PoseFrame;
+      if (!activeRunId.value || incoming?.run_id !== activeRunId.value) return;
+      livePose.value = incoming;
+      liveJoints.value = extractPoseCount(incoming);
       liveFps.value = recordFrameArrival();
     });
   }
@@ -91,6 +153,9 @@ onMounted(() => {
   if (api?.subscribe) {
     api.subscribe((status: unknown) => {
       console.log('[starter-kit] iris status:', status);
+      const captureStatus = status as { capture?: NegotiatedCapture[]; error?: string };
+      negotiatedCapture.value = captureStatus.capture ?? [];
+      captureError.value = captureStatus.error ?? '';
     });
   }
 
@@ -115,19 +180,29 @@ async function startIrisRun(config: CameraConfig[]) {
     return;
   }
 
+  livePose.value = null;
+  activeRunId.value = null;
+  activePoseModel.value = null;
+  liveFps.value = 0;
+  frameArrivalTimes.length = 0;
+  liveJoints.value = { valid: 0, total: poseModel(selectedPoseModel.value).keypoints };
+  videoStreams.value = [];
   bakedRotation.value = config[0]?.rotation ?? 0;
-
-  // Resolution/fps are rig-wide (matches rotation), so only camera 0's values apply.
-  const [width, height] = (config[0]?.resolution ?? '1920x1080').split('x').map(Number);
+  captureError.value = '';
+  const requestedModel = selectedPoseModel.value;
 
   try {
+    // Resolution/fps are rig-wide (matches rotation); captureSettings rejects a rig that disagrees.
+    const settings = captureSettings(config);
     const payload = {
       run_id: `starter-${Date.now()}`,
-      camera_width: width,
-      camera_height: height,
-      video_fps: config[0]?.fps ?? 30,
+      pose_model: requestedModel,
+      camera_width: settings.width,
+      camera_height: settings.height,
+      video_fps: settings.fps,
       cameras: config.map((cam) => ({
-        id: cam.deviceId,
+        id: cam.nativeIndex ?? cam.deviceId,
+        devicePath: cam.nativeIndex !== undefined && !/^\d+$/.test(cam.deviceId) ? cam.deviceId : undefined,
         label: cam.label,
         resolution: cam.resolution,
         fps: cam.fps,
@@ -137,8 +212,19 @@ async function startIrisRun(config: CameraConfig[]) {
 
     const runResult = await api.startRun(payload);
     console.log('[starter-kit] startRun:', runResult);
+    if (!runResult.ok) {
+      captureError.value = runResult.error ?? 'IRIS capture could not start';
+      calibrationOpen.value = false;
+    }
+    else {
+      activePoseModel.value = requestedModel;
+      activeRunId.value = runResult.runId;
+      try { localStorage.setItem('pose-model', requestedModel); } catch { /* Storage is optional. */ }
+    }
   } catch (error) {
     console.warn('[starter-kit] startRun failed:', error);
+    captureError.value = error instanceof Error ? error.message : String(error);
+    calibrationOpen.value = false;
   }
 }
 
@@ -153,6 +239,7 @@ async function openIrisPreview() {
     const result = await api.openPreviewMonitor({
       sharedMemoryName: 'iris_shm_ipc',
       cameraCount: cameras.value.length,
+      targetFps: captureSettings(cameras.value).fps,
       cameras: cameras.value.map((cam) => ({
         id: cam.deviceId,
         label: cam.label,
@@ -196,51 +283,56 @@ function diffCameras(next: CameraConfig[], prev: CameraConfig[]): CameraChangeSe
 }
 
 async function onCameraSetupContinue(config: CameraConfig[]) {
-  cameraSetupOpen.value = false;
-
-  const wasRunning = phase.value !== 'camera-setup';
-  const changes = wasRunning ? diffCameras(config, cameras.value) : null;
-  cameras.value = config;
-
+  if (modelBusy.value) return;
+  modelBusy.value = true;
   try {
-    const api = getIrisApi();
-    if (api?.saveRunConfig) {
-      void api.saveRunConfig({
-        cameras: config.map((cam) => ({
-          deviceId: cam.deviceId,
-          label: cam.label,
-          resolution: cam.resolution,
-          fps: cam.fps,
-          rotation: cam.rotation,
-        })),
-      });
-    }
-  } catch {
-    // ignore missing or failing bridge; navigation should still continue
-  }
+    if (!await validateSelectedModel()) return;
+    cameraSetupOpen.value = false;
 
-  if (!wasRunning) {
+    const wasRunning = phase.value !== 'camera-setup';
+    const changes = wasRunning ? diffCameras(config, cameras.value) : null;
+    cameras.value = config;
+
+    try {
+      const api = getIrisApi();
+      if (api?.saveRunConfig) {
+        void api.saveRunConfig({
+          cameras: config.map((cam) => ({
+            deviceId: cam.deviceId,
+            label: cam.label,
+            resolution: cam.resolution,
+            fps: cam.fps,
+            rotation: cam.rotation,
+          })),
+        });
+      }
+    } catch {
+      // ignore missing or failing bridge; navigation should still continue
+    }
+
+    if (!wasRunning) {
+      phase.value = 'calibration';
+      calibrationSessionId.value += 1;
+      calibrationOpen.value = true;
+      await startIrisRun(config);
+      return;
+    }
+
+    const needsRecalibration = changes!.devicesChanged || changes!.captureChanged || selectedPoseModel.value !== activePoseModel.value;
+    if (!needsRecalibration) return;
+
+    // Running IRIS process was started with the old config; replace it rather than fight over the devices.
+    try {
+      await getIrisApi()?.stopAll?.();
+    } catch {
+      // ignore shutdown issues; startIrisRun below will surface real failures
+    }
+
     phase.value = 'calibration';
     calibrationSessionId.value += 1;
     calibrationOpen.value = true;
-    void startIrisRun(config);
-    return;
-  }
-
-  const needsRecalibration = changes!.devicesChanged || changes!.captureChanged;
-  if (!needsRecalibration) return;
-
-  // Running IRIS process was started with the old config; replace it rather than fight over the devices.
-  try {
-    await getIrisApi()?.stopAll?.();
-  } catch {
-    // ignore shutdown issues; startIrisRun below will surface real failures
-  }
-
-  phase.value = 'calibration';
-  calibrationSessionId.value += 1;
-  calibrationOpen.value = true;
-  void startIrisRun(config);
+    await startIrisRun(config);
+  } finally { modelBusy.value = false; }
 }
 
 function onCameraSetupClose() {
@@ -274,6 +366,8 @@ function onRigCalibrationClose() {
 
 function reopenSetup() {
   settingsOpen.value = false;
+  selectedPoseModel.value = activePoseModel.value ?? loadPoseModel();
+  void refreshPoseModels();
   cameraSetupOpen.value = true;
 }
 
@@ -306,12 +400,15 @@ function replayTour() {
           type="button"
           class="icon-btn"
           aria-label="Settings"
+          :disabled="modelBusy"
           @click="settingsOpen = !settingsOpen"
         >
           ⚙
         </button>
       </div>
     </header>
+    <p v-if="captureError" role="alert" class="capture-status">{{ captureError }}</p>
+    <p v-else-if="phase !== 'camera-setup'" class="capture-status">{{ captureDescription }}</p>
 
     <main class="main">
       <LiveView
@@ -348,13 +445,19 @@ function replayTour() {
 
     <CameraSetupModal
       :open="cameraSetupOpen"
+      :continue-disabled="modelBusy || !modelAvailable"
+      :continue-label="phase !== 'camera-setup' && selectedPoseModel !== activePoseModel ? 'Apply and restart capture' : undefined"
       :editing="phase !== 'camera-setup'"
       :video-streams="videoStreams"
       :current-config="cameras"
       :baked-rotation="bakedRotation"
       @continue="onCameraSetupContinue"
       @close="onCameraSetupClose"
-    />
+    >
+      <PoseModelSelect v-model="selectedPoseModel" :models="poseModels" :disabled="modelBusy" />
+      <p v-if="phase !== 'camera-setup' && selectedPoseModel !== activePoseModel" class="capture-status">Changing the model restarts capture.</p>
+      <p v-if="modelError" role="alert">{{ modelError }}</p>
+    </CameraSetupModal>
     <CalibrationModal
       :key="calibrationSessionId"
       :open="calibrationOpen"
@@ -367,6 +470,11 @@ function replayTour() {
     <div v-if="settingsOpen" class="settings" @click.self="settingsOpen = false">
       <div class="settings-panel">
         <h3>Settings</h3>
+        <PoseModelSelect v-model="selectedPoseModel" :models="poseModels" :disabled="modelBusy" />
+        <small v-if="activePoseModel">Running: {{ poseModel(activePoseModel).description }}</small>
+        <button v-if="phase !== 'camera-setup' && selectedPoseModel !== activePoseModel" type="button" class="btn"
+          :disabled="modelBusy || !modelAvailable" @click="applyPoseModel">{{ modelBusy ? 'Applying?' : 'Apply and restart capture' }}</button>
+        <p v-if="modelError" role="alert">{{ modelError }}</p>
         <button type="button" class="btn" @click="reopenSetup">Camera setup</button>
         <button type="button" class="btn" @click="reopenCalibration">Re-calibrate</button>
         <button
@@ -388,6 +496,7 @@ function replayTour() {
 </template>
 
 <style scoped>
+.capture-status { margin: 0; padding: 8px 20px; color: #a6b8cf; font-size: 13px; }
 .shell {
   display: flex;
   flex-direction: column;
@@ -504,7 +613,7 @@ function replayTour() {
 }
 
 .settings-panel {
-  width: 240px;
+  width: 320px;
   background: #171b24;
   border-left: 1px solid #2a3140;
   padding: 20px;

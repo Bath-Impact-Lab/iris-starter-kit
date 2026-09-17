@@ -1,6 +1,8 @@
+import type { PoseModelId } from '../../shared/poseModels';
 export type AppPhase = 'camera-setup' | 'calibration' | 'live';
 
 export type Resolution = `${number}x${number}`;
+import type { CameraMode } from '../../shared/capture';
 
 export interface CameraDevice {
   id: string;
@@ -10,6 +12,10 @@ export interface CameraDevice {
   defaultRotation?: number;
   maxResolution?: Resolution;
   maxFps?: number;
+  minFps?: number;
+  modes?: CameraMode[];
+  nativeIndex?: number;
+  browserDeviceId?: string;
 }
 
 export interface CameraConfig {
@@ -18,6 +24,8 @@ export interface CameraConfig {
   resolution: Resolution;
   fps: number;
   rotation: number;
+  nativeIndex?: number;
+  browserDeviceId?: string;
 }
 
 export interface RunConfig {
@@ -54,6 +62,8 @@ export interface PosePerson {
 }
 
 export interface PoseFrame {
+  pose_model?: PoseModelId;
+  run_id?: string;
   frame_seq?: number;
   timestamp?: number;
   slot_timestamp?: number;

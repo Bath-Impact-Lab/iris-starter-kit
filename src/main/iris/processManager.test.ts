@@ -9,6 +9,13 @@ function fakeChild() {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 1234;
+  // Like a real ChildProcess, record how it exited before other 'exit' listeners run.
+  child.exitCode = null;
+  child.signalCode = null;
+  child.on('exit', (code: number | null, signal: string | null) => {
+    child.exitCode = code;
+    child.signalCode = signal;
+  });
   child.stdin = { writable: true, write: vi.fn() };
   child.kill = vi.fn((signal: string) => {
     child.emit('exit', null, signal);
@@ -51,7 +58,119 @@ function cameraIdsFromLastConfig(writeTempConfigFile: ReturnType<typeof vi.fn>):
   return lastConfig?.shared?.camera_groups?.capture_rig?.camera_ids ?? [];
 }
 
+describe('ProcessManager pose models', () => {
+  it('passes the selected model to the pipeline', async () => {
+    const { manager, writeTempConfigFile } = makeManager({});
+    expect((await manager.startRun({ pose_model: 'rtmw-coco133', cameras: twoConfiguredCameras })).ok).toBe(true);
+    expect(writeTempConfigFile.mock.calls.at(-1)![0].shared.models.pose.rtmpose_people)
+      .toMatchObject({ num_keypoints: 133, input_w: 288, input_h: 384 });
+    await manager.stopAll();
+  });
+
+  it('tags monitor frames with the model and run captured when the monitor opens', async () => {
+    let receive: (frame: unknown) => void = () => {};
+    const manager = new ProcessManager({ dependencies: {
+      spawnProcess: () => fakeChild(), pathExists: () => true,
+      getExecutablePath: () => 'C:\\fake\\iris_cli.exe', listCameras: async () => null,
+      writeTempConfigFile: () => ({ tmpDir: 'C:\\fake', cfgPath: 'C:\\fake\\config.json' }),
+      createPipeServer: async (options) => { receive = options.onFrame; return { close: () => {} } as any; },
+      videoRelayServer: { stop: async () => {} } as any,
+    } });
+    await manager.startRun({ run_id: 'model-a', pose_model: 'rtmw-coco133' });
+    const onFrame = vi.fn();
+    await manager.startStream({ sessionId: 'monitor-a', options: {}, onFrame });
+    receive({ people: [] });
+    expect(onFrame).toHaveBeenLastCalledWith({ people: [], pose_model: 'rtmw-coco133', run_id: 'model-a' });
+    await manager.stopAll();
+    receive({ people: [] });
+    expect(onFrame).toHaveBeenLastCalledWith({ people: [], pose_model: 'rtmw-coco133', run_id: 'model-a' });
+  });
+
+  it('rejects unknown model IDs before spawning', async () => {
+    const spawnProcess = vi.fn(() => fakeChild());
+    const { manager } = makeManager({ spawnProcess });
+    const result = await manager.startRun({ pose_model: 'invalid' as any });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Unknown pose model');
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+});
+
 describe('ProcessManager camera reconciliation', () => {
+  it.each([[120, 120], [60000 / 1001, 60], [30, 30]])('passes monitor rate %s to Core as %s', async (targetFps, expected) => {
+    const spawnProcess = vi.fn(() => fakeChild());
+    const manager = new ProcessManager({ dependencies: {
+      spawnProcess,
+      pathExists: () => true,
+      getExecutablePath: () => 'C:\\fake\\iris_cli.exe',
+      writeTempConfigFile: () => ({ tmpDir: 'C:\\fake\\tmp', cfgPath: 'C:\\fake\\tmp\\config.json' }),
+      createPipeServer: vi.fn(async () => ({ close: vi.fn() })) as any,
+    } });
+    await manager.startStream({ sessionId: 'rate-test', options: { targetFps } });
+    expect(spawnProcess.mock.calls[0]).toEqual(expect.arrayContaining([
+      expect.arrayContaining(['--fps', String(expected)]),
+    ]));
+  });
+
+  it('rechecks stable device paths and remaps reordered native indices at launch', async () => {
+    const { manager, writeTempConfigFile } = makeManager({ listCameras: async () => [
+      { index: 7, name: 'A', devicePath: 'path-a', modes: [{ width: 1280, height: 720, fpsNumerator: 60, fpsDenominator: 1, format: 'MJPEG' }] },
+      { index: 3, name: 'B', devicePath: 'path-b', modes: [{ width: 1280, height: 720, fpsNumerator: 60, fpsDenominator: 1, format: 'MJPEG' }] },
+    ] });
+    expect((await manager.startRun({ cameras: [
+      { id: 0, devicePath: 'path-a', resolution: '1280x720', fps: 60 },
+      { id: 1, devicePath: 'path-b', resolution: '1280x720', fps: 60 },
+    ] })).ok).toBe(true);
+    expect(cameraIdsFromLastConfig(writeTempConfigFile)).toEqual([7, 3]);
+    expect(writeTempConfigFile.mock.calls.at(-1)![0].shared.camera_groups.capture_rig.fps).toBe(60);
+  });
+
+  it('refuses missing selected devices and unsupported modes before spawning', async () => {
+    const { manager, writeTempConfigFile } = makeManager({ listCameras: async () => [
+      { index: 0, name: 'A', devicePath: 'path-a', modes: [{ width: 1280, height: 720, fpsNumerator: 30, fpsDenominator: 1, format: 'MJPEG' }] },
+    ] });
+    expect((await manager.startRun({ cameras: [{ id: 0, devicePath: 'missing' }] })).error).toContain('no longer available');
+    expect((await manager.startRun({ cameras: [{ id: 0, devicePath: 'path-a', resolution: '1280x720', fps: 60 }] })).error).toContain('does not support');
+    expect(writeTempConfigFile).not.toHaveBeenCalled();
+  });
+
+  it('retains cached capabilities while a running capture holds a device', async () => {
+    let query = 0;
+    const modes = [{ width: 1280, height: 720, fpsNumerator: 120, fpsDenominator: 1, format: 'MJPEG' }];
+    const { manager } = makeManager({ listCameras: async () => [{ index: 0, name: 'A', devicePath: 'path-a', modes: query++ ? [] : modes }] });
+    await manager.getCaptureCameras();
+    expect((await manager.getCaptureCameras())![0].modes).toEqual(modes);
+  });
+
+  it('publishes fragmented capture descriptors and clears confirmation on unexpected exit', async () => {
+    const child = fakeChild();
+    const manager = new ProcessManager({ dependencies: {
+      spawnProcess: () => child, pathExists: () => true, getExecutablePath: () => 'fake',
+      listCameras: async () => null, writeTempConfigFile: () => ({ tmpDir: 'fake', cfgPath: 'fake.json' }),
+    } });
+    await manager.startRun({ run_id: 'capture', camera_width: 1280, camera_height: 720, video_fps: 60000 / 1001, cameras: [{ id: 7 }] });
+    child.stdout.emit('data', 'noise\nIRIS_CAPTURE_SET');
+    child.stdout.emit('data', 'TINGS {"cameraId":7,"width":1280,"height":720,"fpsNumerator":60000,"fpsDenominator":1001,"format":"MJPEG"}\n');
+    expect(manager.getStatus().capture?.[0].fpsNumerator).toBe(60000);
+    child.emit('exit', 1, null);
+    expect(manager.getStatus()).toMatchObject({ failed: true, capture: [] });
+  });
+  it('isolates DA3 output directories even when a run ID is reused', async () => {
+    const first = makeManager({}), second = makeManager({});
+    await first.manager.startRun({ run_id: 'same', cameras: twoConfiguredCameras });
+    await second.manager.startRun({ run_id: 'same', cameras: twoConfiguredCameras });
+    const a = first.writeTempConfigFile.mock.calls.at(-1)![0].pipeline.triangulation.da3_startup_calibration;
+    const b = second.writeTempConfigFile.mock.calls.at(-1)![0].pipeline.triangulation.da3_startup_calibration;
+    expect(a.output_dir).not.toBe(b.output_dir);
+    expect(a.save_ply).toBe('scene.ply');
+  });
+  it('rejects a capture area draft belonging to another run before contacting core', async () => {
+    const { manager } = makeManager({});
+    await manager.startRun({ run_id: 'current', cameras: twoConfiguredCameras });
+    const reply = await manager.roiRequest('roi.apply', { runId: 'previous', mode: 'off', calibrationVersion: 1, roiVersion: 0 });
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain('run changed');
+  });
   it('passes the configured cameras through unchanged when IRIS reports the same count', async () => {
     const { manager, writeTempConfigFile } = makeManager({
       listCameras: async () => [
@@ -171,4 +290,17 @@ describe('ProcessManager graceful monitor shutdown', () => {
       vi.useRealTimers();
     }
   });
+
+  // 'exit' only fires once, so waiting for it after a crash would hang app quit.
+  it('stops a session whose process already exited', async () => {
+    const child = fakeChild();
+    const { manager } = makeManager({ spawnProcess: () => child });
+    await manager.startRun({ run_id: 'crashed', cameras: twoConfiguredCameras });
+
+    child.emit('exit', 1, null);
+    child.kill = vi.fn();
+
+    await manager.stopAll();
+    expect(child.kill).not.toHaveBeenCalled();
+  }, 1000);
 });

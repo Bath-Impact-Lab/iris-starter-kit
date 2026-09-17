@@ -1,10 +1,13 @@
+import { poseModel } from '../../shared/poseModels';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveIrisExecutable } from './resolveIrisExecutable.js';
+import { captureSettings, type NativeCamera } from '../../shared/capture';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,7 +39,11 @@ function isElectronAppPackaged(): boolean {
   }
 }
 
-export const PIPE_NAME = '\\\\.\\pipe\\iris_ipc';
+// Unique per session: a fixed name collides with a second app instance or a
+// server that hasn't released it yet, and a predictable one can be squatted.
+export function uniquePipeName(prefix: string): string {
+  return `\\\\.\\pipe\\${prefix}_${randomUUID()}`;
+}
 
 function getAppDataPath(): string {
   const envAppData = process.env.APPDATA || process.env.LOCALAPPDATA;
@@ -90,11 +97,7 @@ export function getIrisCliPath(): string {
   });
 }
 
-export interface IrisCameraDevice {
-  index: number;
-  name: string;
-  devicePath?: string;
-}
+export type IrisCameraDevice = NativeCamera;
 
 // IRIS's own view of what cameras it can actually open (`iris_cli
 // show-cameras --json`), as opposed to the browser/OS device lists the
@@ -118,6 +121,11 @@ export async function listIrisCameras(cliPath: string): Promise<IrisCameraDevice
       index: Number(camera.index),
       name: String(camera.name ?? ''),
       devicePath: camera.device_path ? String(camera.device_path) : undefined,
+      modes: Array.isArray(camera.modes) ? camera.modes.map((mode: any) => ({
+        width: Number(mode.width), height: Number(mode.height),
+        fpsNumerator: Number(mode.fps_numerator), fpsDenominator: Number(mode.fps_denominator),
+        format: String(mode.format ?? ''),
+      })) : undefined,
     }));
   } catch (error) {
     console.warn('[iris:config] "iris_cli show-cameras" failed -- skipping camera reconciliation:', error);
@@ -168,20 +176,23 @@ export function resolveCaptureRotation(options: { rotation?: any; cameras?: Arra
 
 export function buildConfigFromOptions(options: Record<string, any> = {}) {
   const runId = options.run_id ?? `run-${Date.now()}`;
-  const width = Number(options.camera_width ?? 1920);
-  const height = Number(options.camera_height ?? 1080);
   const cameras = Array.isArray(options.cameras) ? options.cameras : [];
+  const { width, height, fps } = captureSettings(cameras, options);
   const cameraIds = cameras.map((camera: any, index: number) => {
     const idValue = Number(camera?.id ?? index);
     return Number.isFinite(idValue) ? idValue : index;
   });
-  const fps = Number.isFinite(options.video_fps) ? Number(options.video_fps) : (cameras[0]?.fps ?? 30);
   const rotate = resolveCaptureRotation(options);
   const cameraCount = Math.max(1, cameraIds.length);
   const modelDir = IRIS_MODEL_DIR.replace(/\\/g, '/');
   const outputDir = IRIS_CALIBRATION_DIR.replace(/\\/g, '/');
 
   const config = loadPipelineTemplate();
+  // Manual areas are reviewed after calibration; never replay old world coordinates.
+  if (options.roi_mode !== undefined) {
+    config.pipeline.global_reid_tracking.capture_volume.enabled = options.roi_mode === 'automatic';
+    delete config.pipeline.global_reid_tracking.capture_volume.polygon_xy_override;
+  }
 
   config.run_id = runId;
   config.runtime.buffers.camera_count = cameraCount;
@@ -199,7 +210,13 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
 
   config.shared.models.detection.yolox_people.yolox_engine_path = `${modelDir}/yolox_s_bs16.trt`;
   config.shared.models.reid.osnet_x05.engine_path = `${modelDir}/osnet_x05_fp16.trt`;
-  config.shared.models.pose.rtmpose_people.engine = `${modelDir}/rtmpose_bs16_fp16.trt`;
+  const model = poseModel(options.pose_model);
+  Object.assign(config.shared.models.pose.rtmpose_people, {
+    engine: `${modelDir}/${model.engine}`,
+    input_w: model.width,
+    input_h: model.height,
+    num_keypoints: model.keypoints,
+  });
 
   // A published calibration replaces live auto-calibration: triangulation
   // reads a fixed extrinsics file instead of estimating poses each run.

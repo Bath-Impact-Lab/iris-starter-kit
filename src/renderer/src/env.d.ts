@@ -1,11 +1,14 @@
 /// <reference types="vite/client" />
 
 import type { CameraDevice, RigCalibrationStatus, RunConfig } from './types';
+import type { RoiApi } from '../../shared/roi';
+import type { NativeCamera } from '../../shared/capture';
 
-interface IrisStarterApi {
+interface IrisStarterApi extends RoiApi {
   version: string;
   platform: string;
   listCameras: () => Promise<CameraDevice[]>;
+  listCaptureCameras: () => Promise<NativeCamera[] | null>;
   saveRunConfig: (config: RunConfig) => Promise<{ ok: boolean }>;
   startPoseStream: (options?: Record<string, any>) => Promise<{ ok: boolean; sessionId?: string; error?: string }>;
   stopRun: (runId?: string) => Promise<{ ok: boolean; sessionId?: string; error?: string }>;

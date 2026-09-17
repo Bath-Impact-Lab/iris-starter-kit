@@ -1,6 +1,9 @@
+import type { PoseModelId, PoseModelAvailability } from '../shared/poseModels';
 import { contextBridge, ipcRenderer } from 'electron';
+import type { RoiEdit, RoiReply, SceneKey, Da3SceneReply } from '../shared/roi';
+import type { NativeCamera } from '../shared/capture';
 
-type Resolution = '1280x720' | '1920x1080' | '2560x1440';
+type Resolution = `${number}x${number}`;
 
 interface CameraDevice {
   id: string;
@@ -21,9 +24,16 @@ interface RunConfig {
 }
 
 const irisApi = {
+  listPoseModels: () => ipcRenderer.invoke('pose-models:list') as Promise<PoseModelAvailability[]>,
+  validatePoseModel: (id: PoseModelId) => ipcRenderer.invoke('pose-models:validate', id) as Promise<void>,
+  roiScene: (key: SceneKey) => ipcRenderer.invoke('roi:scene', key) as Promise<Da3SceneReply>,
+  roiGet: () => ipcRenderer.invoke('roi:get') as Promise<RoiReply>,
+  roiPreview: (edit: RoiEdit) => ipcRenderer.invoke('roi:preview', edit) as Promise<RoiReply>,
+  roiApply: (edit: RoiEdit) => ipcRenderer.invoke('roi:apply', edit) as Promise<RoiReply>,
   version: '0.1.0',
   platform: process.platform,
   listCameras: () => ipcRenderer.invoke('cameras:list') as Promise<CameraDevice[]>,
+  listCaptureCameras: () => ipcRenderer.invoke('cameras:capture') as Promise<NativeCamera[] | null>,
   saveRunConfig: (config: RunConfig) => ipcRenderer.invoke('run:save-config', config),
   startPoseStream: (options?: Record<string, any>) => ipcRenderer.invoke('run:start-stream', options),
   stopRun: (runId?: string) => ipcRenderer.invoke('run:stop', runId),

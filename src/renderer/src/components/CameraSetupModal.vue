@@ -2,7 +2,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { CameraConfig, CameraDevice, Resolution, VideoStreamDescriptor } from '../types';
 import { ROTATION_OPTIONS } from '../data/mock';
-import { ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig } from '../utils/camera-probe';
+import { describePreviewMode, ensurePermission, getCommonFpsOptions, getCommonResolutionOptions, listVideoInputs, probeCamera, selectCommonConfig, nativeCameraProfiles, previewVideoConstraints, type PreviewMode } from '../utils/camera-probe';
+import { sameFps } from '../../../shared/capture';
 import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import AppModal from './AppModal.vue';
 
@@ -10,6 +11,8 @@ const props = defineProps<{
   open: boolean;
   // True when reopened from Settings to edit an already-running setup.
   editing?: boolean;
+  continueDisabled?: boolean;
+  continueLabel?: string;
   // IRIS's own live video streams -- reused for the preview since IRIS
   // already holds each device and a second getUserMedia() grab would fail.
   videoStreams?: VideoStreamDescriptor[];
@@ -40,7 +43,25 @@ const selectedIds = ref<Set<string>>(new Set());
 const showAllPreviews = ref(false);
 const videoElements = ref<Record<string, HTMLVideoElement | null>>({});
 const activeStreams = ref<Record<string, MediaStream>>({});
+const previewModes = ref<Record<string, PreviewMode | null>>({});
+const previewErrors = ref<Set<string>>(new Set());
+const previewGeneration = new Map<string, number>();
 const loading = ref(false);
+const rigResolution = ref<Resolution>('1920x1080'), rigFps = ref(30);
+const selectedProfiles = computed(() => deviceProfiles.value.filter(device => selectedIds.value.has(device.id)));
+const selectedCameras = computed(() => cameras.value.filter(cam => selectedIds.value.has(cam.deviceId)));
+const selectableResolutions = computed(() => getCommonResolutionOptions(selectedProfiles.value));
+const selectableFps = computed(() => getCommonFpsOptions(selectedProfiles.value, rigResolution.value));
+const validRig = computed(() => selectedCameras.value.length > 0 && selectableResolutions.value.includes(rigResolution.value) &&
+  selectableFps.value.some(fps => sameFps(fps, rigFps.value)));
+const unverifiedModes = computed(() => selectedProfiles.value.some(device => !device.modes?.length));
+watch([selectedProfiles, rigResolution], () => {
+  if (loading.value) return;
+  if (!selectableResolutions.value.includes(rigResolution.value) && selectableResolutions.value.length)
+    rigResolution.value = selectableResolutions.value.includes('1920x1080') ? '1920x1080' : selectableResolutions.value[0];
+  if (!selectableFps.value.some(fps => sameFps(fps, rigFps.value)))
+    rigFps.value = [...selectableFps.value].sort((a, b) => Math.abs(a - 30) - Math.abs(b - 30))[0] ?? 30;
+});
 
 // IRIS-stream-backed previews, decoded like LiveView. Keyed by deviceId, not rendering position --
 // videoStreams is indexed by position in currentConfig, which this modal's own device order can disagree with.
@@ -106,8 +127,8 @@ function attachIrisDecoder(deviceId: string): void {
 }
 
 function setCanvasRef(deviceId: string) {
-  return (el: HTMLCanvasElement | null) => {
-    if (el) {
+  return (el: unknown) => {
+    if (el instanceof HTMLCanvasElement) {
       canvasElements.set(deviceId, el);
       attachIrisDecoder(deviceId);
     } else {
@@ -133,30 +154,6 @@ function detachAllIrisDecoders(): void {
   for (const deviceId of [...irisDecoders.keys()]) detachIrisDecoder(deviceId);
 }
 
-const selectableResolutions = computed<Resolution[]>(() => {
-  const common = getCommonResolutionOptions(deviceProfiles.value);
-  if (common.length > 0) return common;
-
-  const unique = new Set<Resolution>();
-  for (const cam of cameras.value) {
-    unique.add(cam.resolution);
-  }
-  const values = [...unique].sort((a, b) => {
-    const aSize = Number(a.split('x')[0]) * Number(a.split('x')[1]);
-    const bSize = Number(b.split('x')[0]) * Number(b.split('x')[1]);
-    return bSize - aSize;
-  });
-  return values.length > 0 ? values : ['1280x720' as Resolution];
-});
-
-const selectableFps = computed<number[]>(() => {
-  const common = getCommonFpsOptions(deviceProfiles.value);
-  if (common.length > 0) return common;
-
-  const values = [...new Set(cameras.value.map((cam) => cam.fps))].sort((a, b) => b - a);
-  return values.length > 0 ? values : [30];
-});
-
 function defaultConfig(device: CameraDevice, index: number): CameraConfig {
   const friendlyLabel = device.label && device.label.trim() ? device.label : `Camera ${index + 1}`;
   return {
@@ -165,6 +162,8 @@ function defaultConfig(device: CameraDevice, index: number): CameraConfig {
     resolution: device.suggestedResolution ?? (index === 0 ? '1920x1080' : '1280x720'),
     fps: device.suggestedFps ?? 30,
     rotation: device.defaultRotation ?? 0,
+    nativeIndex: device.nativeIndex,
+    browserDeviceId: device.browserDeviceId,
   };
 }
 
@@ -182,8 +181,28 @@ async function loadCameras() {
   loading.value = true;
   try {
     await ensurePermission();
-    const devices = await listVideoInputs();
+    const [devices, native] = await Promise.all([
+      listVideoInputs().catch(() => []),
+      window.irisStarter?.listCaptureCameras?.().catch(() => null) ?? Promise.resolve(null),
+    ]);
     const knownByDeviceId = new Map((props.editing ? props.currentConfig : undefined)?.map((c) => [c.deviceId, c]) ?? []);
+    if (native !== null && native !== undefined) {
+      deviceProfiles.value = nativeCameraProfiles(native, devices);
+      cameras.value = deviceProfiles.value.map((device, index) => {
+        let persisted: Partial<CameraConfig> & { displayName?: string } = {};
+        try { persisted = JSON.parse(localStorage.getItem(`camera-config:${device.id}`) ?? '{}') ?? {}; } catch { /* Ignore corrupt preferences. */ }
+        return { ...defaultConfig(device, index), label: persisted.displayName ?? device.label,
+          rotation: persisted.rotation ?? device.defaultRotation ?? 0,
+          ...knownByDeviceId.get(device.id), nativeIndex: device.nativeIndex, browserDeviceId: device.browserDeviceId };
+      });
+      selectedIds.value = new Set(cameras.value.filter(cam => knownByDeviceId.has(cam.deviceId) || readPersistedSelection(cam.deviceId)).map(cam => cam.deviceId));
+      const common = selectCommonConfig(selectedProfiles.value);
+      let remembered: { resolution?: Resolution; fps?: number } = {};
+      try { remembered = JSON.parse(localStorage.getItem('capture-rig-settings') ?? '{}') ?? {}; } catch { /* Ignore corrupt preferences. */ }
+      rigResolution.value = props.currentConfig?.[0]?.resolution ?? remembered.resolution ?? common.resolution;
+      rigFps.value = props.currentConfig?.[0]?.fps ?? remembered.fps ?? common.fps;
+      return;
+    }
 
     // Probing a device IRIS already holds fails and overwrites its real resolution/fps with fallback defaults.
     const toProbe = devices.filter((d) => !knownByDeviceId.has(d.deviceId));
@@ -201,6 +220,8 @@ async function loadCameras() {
     const common = selectCommonConfig(deviceProfiles.value);
     const preferredResolution = common.resolution ?? '1920x1080';
     const preferredFps = common.fps ?? 30;
+    rigResolution.value = props.currentConfig?.[0]?.resolution ?? preferredResolution;
+    rigFps.value = props.currentConfig?.[0]?.fps ?? preferredFps;
 
     cameras.value = devices.map((d, index) => {
       const known = knownByDeviceId.get(d.deviceId);
@@ -249,6 +270,10 @@ async function loadCameras() {
     }
   } finally {
     loading.value = false;
+    if (!selectableResolutions.value.includes(rigResolution.value) && selectableResolutions.value.length)
+      rigResolution.value = selectCommonConfig(selectedProfiles.value).resolution;
+    if (!selectableFps.value.some(fps => sameFps(fps, rigFps.value)))
+      rigFps.value = selectCommonConfig(selectedProfiles.value).fps;
   }
 }
 
@@ -256,6 +281,7 @@ async function postLoadSetup() {
   const all = new Set<string>();
   cameras.value.forEach((c) => all.add(c.deviceId));
   expandedIds.value = all;
+  showAllPreviews.value = true;
   await nextTick();
   await Promise.all(
     cameras.value.map((c) => (hasIrisStream(c.deviceId) ? Promise.resolve() : startPreview(c.deviceId))),
@@ -306,7 +332,8 @@ function toggleSelected(deviceId: string): void {
 }
 
 function setVideoRef(deviceId: string) {
-  return (el: HTMLVideoElement | null) => {
+  return (value: unknown) => {
+    const el = value instanceof HTMLVideoElement ? value : null;
     videoElements.value[deviceId] = el;
     if (el && activeStreams.value[deviceId]) {
       el.srcObject = activeStreams.value[deviceId];
@@ -319,9 +346,40 @@ async function startPreview(deviceId: string) {
     return;
   }
 
+  const config = cameras.value.find(cam => cam.deviceId === deviceId);
+  const browserId = config?.browserDeviceId ?? (config?.nativeIndex === undefined ? deviceId : undefined);
+  if (!browserId) {
+    previewErrors.value = new Set(previewErrors.value).add(deviceId);
+    return;
+  }
+  const generation = (previewGeneration.get(deviceId) ?? 0) + 1;
+  previewGeneration.set(deviceId, generation);
+  previewErrors.value = new Set([...previewErrors.value].filter(id => id !== deviceId));
+  previewModes.value = { ...previewModes.value, [deviceId]: null };
+
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: previewVideoConstraints(browserId, rigResolution.value, rigFps.value),
+      });
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'OverconstrainedError') throw error;
+      if (previewGeneration.get(deviceId) !== generation) return;
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: previewVideoConstraints(browserId, rigResolution.value, rigFps.value, false),
+      });
+    }
+    if (previewGeneration.get(deviceId) !== generation) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
     activeStreams.value[deviceId] = stream;
+    const settings = stream.getVideoTracks()[0]?.getSettings() ?? {};
+    previewModes.value = {
+      ...previewModes.value,
+      [deviceId]: describePreviewMode(settings, rigResolution.value, rigFps.value),
+    };
     await nextTick();
     const video = videoElements.value[deviceId];
     if (video) {
@@ -331,22 +389,49 @@ async function startPreview(deviceId: string) {
       });
     }
   } catch {
-    // ignore preview failures; user can still configure camera settings
+    if (previewGeneration.get(deviceId) === generation) {
+      previewErrors.value = new Set(previewErrors.value).add(deviceId);
+    }
   }
 }
 
 function stopPreview(deviceId: string) {
+  previewGeneration.set(deviceId, (previewGeneration.get(deviceId) ?? 0) + 1);
   const stream = activeStreams.value[deviceId];
-  if (!stream) {
-    return;
-  }
-
-  stream.getTracks().forEach((track) => track.stop());
+  stream?.getTracks().forEach((track) => track.stop());
   delete activeStreams.value[deviceId];
+  const nextModes = { ...previewModes.value };
+  delete nextModes[deviceId];
+  previewModes.value = nextModes;
 }
 
 function stopAllPreviews() {
-  Object.keys(activeStreams.value).forEach((deviceId) => stopPreview(deviceId));
+  cameras.value.forEach(camera => stopPreview(camera.deviceId));
+}
+
+async function restartVisibleBrowserPreviews(): Promise<void> {
+  if (!props.open || loading.value) return;
+  const deviceIds = [...expandedIds.value].filter(deviceId => !hasIrisStream(deviceId));
+  deviceIds.forEach(stopPreview);
+  await Promise.all(deviceIds.map(startPreview));
+}
+
+watch([rigResolution, rigFps], ([resolution, fps], previous) => {
+  if (!previous || resolution === previous[0] && sameFps(fps, previous[1])) return;
+  void restartVisibleBrowserPreviews();
+});
+
+function formatPreviewFps(fps: number | undefined): string {
+  return fps === undefined ? '' : ` · ${Number(fps.toFixed(2))} fps`;
+}
+
+function previewLabel(deviceId: string): string {
+  if (hasIrisStream(deviceId)) return `Capture preview · ${rigResolution.value} · ${Number(rigFps.value.toFixed(2))} fps`;
+  if (previewErrors.value.has(deviceId)) return 'Preview unavailable';
+  const mode = previewModes.value[deviceId];
+  if (!mode) return `Opening ${rigResolution.value} preview…`;
+  const actual = mode.width && mode.height ? `${mode.width}×${mode.height}${formatPreviewFps(mode.fps)}` : 'mode unavailable';
+  return mode.approximate ? `Approximate preview · ${actual} · target ${rigResolution.value}` : `Preview · ${actual}`;
 }
 
 async function toggleCameraExpansion(deviceId: string) {
@@ -405,7 +490,7 @@ function persistCameraConfig() {
     const key = `camera-config:${cam.deviceId}`;
     const prevRaw = localStorage.getItem(key);
     const prev = prevRaw ? JSON.parse(prevRaw) : {};
-    const next = { ...(prev || {}), displayName: cam.label, rotation: cam.rotation, resolution: cam.resolution, fps: cam.fps };
+    const next = { ...(prev || {}), displayName: cam.label, rotation: cam.rotation, resolution: cam.resolution, fps: cam.fps, browserDeviceId: cam.browserDeviceId };
     try {
       localStorage.setItem(key, JSON.stringify(next));
     } catch {
@@ -414,11 +499,12 @@ function persistCameraConfig() {
   });
 }
 
-const selectedCameras = computed(() => cameras.value.filter((cam) => isSelected(cam.deviceId)));
-
 function onContinue() {
-  if (selectedCameras.value.length === 0) return;
+  if (!validRig.value) return;
+  for (const cam of cameras.value) { cam.resolution = rigResolution.value; cam.fps = rigFps.value; }
   persistCameraConfig();
+  try { localStorage.setItem('capture-rig-settings', JSON.stringify({ resolution: rigResolution.value, fps: rigFps.value })); } catch { /* Preferences are optional. */ }
+  stopAllPreviews();
   emit('continue', selectedCameras.value);
 }
 
@@ -443,13 +529,23 @@ function onDisplayNameChange(cam: CameraConfig) {
   <AppModal title="Camera setup" :open="open" @close="onClose">
     <div class="header-row">
       <div>
-        <p class="lead">Select your connected cameras and verify their configuration.</p>
-        <p class="subtext">Uncheck any camera that isn't actually connected (a stale or ghost entry) or that you don't want IRIS to use.</p>
+        <p class="lead">Your connected cameras</p>
+        <p class="subtext">Cameras are included by default. Uncheck any you don’t want to use; your choices are remembered.</p>
       </div>
       <button type="button" class="btn ghost" @click="toggleAllPreviews">
         {{ showAllPreviews ? 'Hide previews' : 'Show previews' }}
       </button>
     </div>
+    <div v-if="!loading" class="config-grid rig-settings">
+      <label class="field"><span>Capture resolution (all selected cameras)</span>
+        <select v-model="rigResolution"><option v-for="r in selectableResolutions" :key="r" :value="r">{{ r }}</option></select>
+      </label>
+      <label class="field"><span>Capture FPS (all selected cameras)</span>
+        <select v-model.number="rigFps"><option v-for="f in selectableFps" :key="f" :value="f">{{ Number(f.toFixed(3)) }}</option></select>
+      </label>
+    </div>
+    <p v-if="!loading && selectedCameras.length && !validRig" class="footer-warning" role="alert">No shared MJPEG capture mode is available for the selected cameras. Choose a different resolution or deselect a camera.</p>
+    <p v-if="!loading && unverifiedModes" class="subtext">Capture modes could not be verified for every camera. The capture process will check the requested settings at startup.</p>
 
     <div v-if="loading" class="loader">
       <div class="spinner" aria-hidden="true"></div>
@@ -459,13 +555,13 @@ function onDisplayNameChange(cam: CameraConfig) {
       <div v-for="(cam, camIndex) in cameras" :key="cam.deviceId" class="camera-card" :class="{ deselected: !isSelected(cam.deviceId) }">
         <div class="camera-summary">
           <label class="select-toggle" @click.stop>
-            <input type="checkbox" :checked="isSelected(cam.deviceId)" @change="toggleSelected(cam.deviceId)" />
+            <input type="checkbox" :aria-label="`Use ${cam.label}`" :checked="isSelected(cam.deviceId)" @change="toggleSelected(cam.deviceId)" />
           </label>
           <button type="button" class="camera-summary-main" @click="toggleCameraExpansion(cam.deviceId)">
             <div>
               <div class="camera-title">{{ cam.label }}</div>
               <div v-if="!expandedIds.has(cam.deviceId)" class="camera-meta">
-                {{ cam.resolution }} · {{ cam.fps }} fps · {{ cam.rotation }}°
+                {{ rigResolution }} · {{ Number(rigFps.toFixed(3)) }} fps · {{ cam.rotation }}°
                 <span v-if="!isSelected(cam.deviceId)"> · not used</span>
               </div>
             </div>
@@ -490,27 +586,15 @@ function onDisplayNameChange(cam: CameraConfig) {
               muted
               playsinline
             />
-            <div class="preview-overlay">Live camera preview</div>
+            <div class="preview-overlay" :class="{ approximate: previewModes[cam.deviceId]?.approximate }" :title="previewLabel(cam.deviceId)">
+              {{ previewLabel(cam.deviceId) }}
+            </div>
           </div>
 
           <div class="config-grid" :data-tour="camIndex === 0 ? 'camera-config' : undefined">
             <label class="field field-full">
               <span>Display name</span>
               <input type="text" v-model="cam.label" @change="onDisplayNameChange(cam)" />
-            </label>
-
-            <label class="field">
-              <span>Resolution</span>
-              <select v-model="cam.resolution">
-                <option v-for="r in selectableResolutions" :key="r" :value="r">{{ r }}</option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span>FPS</span>
-              <select v-model.number="cam.fps">
-                <option v-for="f in selectableFps" :key="f" :value="f">{{ f }}</option>
-              </select>
             </label>
 
             <label class="field">
@@ -524,16 +608,19 @@ function onDisplayNameChange(cam: CameraConfig) {
       </div>
     </div>
 
+    <slot />
+
     <template #footer>
       <span v-if="!loading && selectedCameras.length === 0" class="footer-warning">Select at least one camera to continue.</span>
-      <button type="button" class="btn primary" data-tour="continue-setup" :disabled="selectedCameras.length === 0" @click="onContinue">
-        {{ editing ? 'Done' : 'Continue' }}{{ selectedCameras.length > 0 ? ` (${selectedCameras.length} selected)` : '' }}
+      <button type="button" class="btn primary" data-tour="continue-setup" :disabled="loading || !validRig || continueDisabled" @click="onContinue">
+        {{ continueLabel ?? (editing ? 'Done' : 'Continue') }}{{ selectedCameras.length > 0 ? ` (${selectedCameras.length} selected)` : '' }}
       </button>
     </template>
   </AppModal>
 </template>
 
 <style scoped>
+.rig-settings { margin-bottom: 18px; }
 .header-row {
   display: flex;
   align-items: center;
@@ -715,6 +802,14 @@ function onDisplayNameChange(cam: CameraConfig) {
   padding: 6px 10px;
   border-radius: 999px;
   pointer-events: none;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-overlay.approximate {
+  color: #fbbf24;
 }
 
 .config-grid {

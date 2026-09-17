@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildConfigFromOptions, PIPE_NAME } from './config.js';
+import { buildConfigFromOptions, uniquePipeName } from './config.js';
 import { ProcessManager } from './processManager.js';
 
 describe('config', () => {
-  it('PIPE_NAME uses the double-backslash Windows named pipe device format', () => {
-    expect(PIPE_NAME).toBe('\\\\.\\pipe\\iris_ipc');
+  it('uniquePipeName uses the Windows named pipe device format with a unique suffix', () => {
+    const name = uniquePipeName('iris_pose');
+    expect(name).toMatch(/^\\\\\.\\pipe\\iris_pose_[0-9a-f-]{36}$/);
+    expect(uniquePipeName('iris_pose')).not.toBe(name);
   });
 
   it('buildConfigFromOptions matches the IRIS spec top-level shape (run_id/runtime/shared/pipeline)', () => {
@@ -54,5 +56,22 @@ describe('config', () => {
     expect(status.state).toBe('idle');
     expect(status.previewOpen).toBe(false);
     expect(status.runId).toBe(null);
+  });
+
+  it('uses the selected shared capture mode and retains fractional FPS', () => {
+    const config = buildConfigFromOptions({ cameras: [
+      { id: 4, resolution: '1280x720', fps: 60000 / 1001 },
+      { id: 7, resolution: '1280x720', fps: 60000 / 1001 },
+    ] });
+    expect(config.runtime.buffers.camera_width).toBe(1280);
+    expect(config.runtime.buffers.camera_height).toBe(720);
+    expect(config.shared.camera_groups.capture_rig).toMatchObject({ camera_ids: [4, 7], width: 1280, height: 720, fps: 60000 / 1001 });
+  });
+
+  it('rejects mixed camera settings and conflicting top-level overrides', () => {
+    expect(() => buildConfigFromOptions({ cameras: [{ fps: 25 }, { fps: 30 }] })).toThrow('same capture');
+    expect(() => buildConfigFromOptions({ video_fps: 30, cameras: [{ fps: 60 }] })).toThrow('same capture');
+    expect(() => buildConfigFromOptions({ cameras: [{ resolution: '1280x720' }, { resolution: '1920x1080' }] })).toThrow('same capture');
+    expect(() => buildConfigFromOptions({ video_fps: NaN })).toThrow('Invalid capture');
   });
 });

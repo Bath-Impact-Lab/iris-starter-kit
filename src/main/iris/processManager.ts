@@ -1,12 +1,20 @@
+import { DEFAULT_POSE_MODEL, poseModel, type PoseModelId } from '../../shared/poseModels'
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
-import { PIPE_NAME, buildConfigFromOptions, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
+import { buildConfigFromOptions, uniquePipeName, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
 import { createPipeServer } from './pipeServer.js'
 import { createVideoPipeReader } from './videoPipeReader.js'
 import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
 import { IrisRunStore } from './runStore.js'
 import { writeTempConfigFile } from './utils.js'
+import { RoiClient } from './roiClient.js'
+import { randomUUID } from 'node:crypto'
+import path from 'node:path'
+import { Da3SceneSource } from './da3Scene.js'
+import type { SceneKey, Da3SceneReply } from '../../shared/roi'
+import type { RoiEdit, RoiOperation, RoiReply } from '../../shared/roi'
+import { captureSettings, usableModes, modeFps, sameFps, type NegotiatedCapture } from '../../shared/capture'
 
 // `run` and `monitor` are separate IRIS processes, not one sequential
 // chain. Marker strings below must match IRIS's log output exactly.
@@ -87,9 +95,13 @@ export interface IrisDispatcherStatus {
   previewOpen: boolean
   stopping: boolean
   failed: boolean
+  capture?: NegotiatedCapture[]
+  error?: string
 }
 
 export interface StartIrisRunInput {
+  pose_model?: PoseModelId
+  roi_mode?: 'off' | 'automatic'
   specFile?: string
   verbose?: boolean
   profileFile?: string
@@ -97,7 +109,7 @@ export interface StartIrisRunInput {
   camera_width?: number
   camera_height?: number
   video_fps?: number
-  cameras?: Array<{ id: string | number; label?: string; resolution?: string; fps?: number; rotation?: number }>
+  cameras?: Array<{ id: string | number; devicePath?: string; label?: string; resolution?: string; fps?: number; rotation?: number }>
   // A published rig calibration's extrinsics.json (see
   // rigCalibrationCoordinator.ts) for the currently configured cameras --
   // when set, triangulation uses it instead of da3_startup_calibration.
@@ -131,8 +143,9 @@ export class ProcessManager {
   private readonly openVideoPipeReader: NonNullable<ProcessManagerDependencies['createVideoPipeReader']>
   private readonly videoRelay: VideoRelayServer
   private readonly createTempConfig: NonNullable<ProcessManagerDependencies['writeTempConfigFile']>
-  private readonly pipeName: string
+  private readonly pipeName: string | undefined
   private readonly listCameras: NonNullable<ProcessManagerDependencies['listCameras']>
+  private cameraProfiles = new Map<string, IrisCameraDevice>()
   private status: IrisDispatcherStatus = {
     state: 'idle',
     runId: null,
@@ -145,7 +158,37 @@ export class ProcessManager {
   }
 
   private readonly runStore?: IrisRunStore
+  private activePoseModel: PoseModelId | undefined
   private streamSessionId: string | null = null
+  private roiClient: RoiClient | null = null
+  private da3Scene: Da3SceneSource | null = null
+
+  async roiRequest(operation: RoiOperation, edit?: RoiEdit): Promise<RoiReply> {
+    const client = this.roiClient
+    if (!client) return { ok: false, error: 'Start an IRIS run to configure its capture area' }
+    if (edit && edit.runId !== client.runId) return { ok: false, error: 'IRIS run changed; reopen capture area before applying' }
+    try {
+      const result = await client.request(operation, edit)
+      if (this.roiClient !== client) return { ok: false, error: 'IRIS run changed; refresh capture area' }
+      if (operation !== 'roi.preview' && result.ok && result.state) this.da3Scene?.observe(result.state)
+      return result
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  async roiScene(key: SceneKey): Promise<Da3SceneReply> {
+    const source = this.da3Scene
+    if (!source || key?.runId !== source.runId) return { ok: false, error: 'No DA3 scene for this run' }
+    try {
+      const current = await this.roiRequest('roi.get')
+      if (!current.ok || !current.state || current.state.calibrationVersion !== key.calibrationVersion) throw new Error('Calibration changed; refresh the scene')
+      const scene = await source.load(current.state)
+      const after = await this.roiRequest('roi.get')
+      if (this.da3Scene !== source || !after.ok || after.state?.calibrationVersion !== key.calibrationVersion) throw new Error('Calibration changed while loading the scene')
+      return { ok: true, scene }
+    } catch (error) {
+      return { ok: false, error: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'DA3 scene is not ready yet. Retry after calibration.' : String(error instanceof Error ? error.message : error) }
+    }
+  }
 
   constructor(options: ProcessManagerOptions = {}) {
     const dependencies = options.dependencies ?? {}
@@ -158,7 +201,7 @@ export class ProcessManager {
     this.openVideoPipeReader = dependencies.createVideoPipeReader ?? createVideoPipeReader
     this.videoRelay = dependencies.videoRelayServer ?? new VideoRelayServer()
     this.createTempConfig = dependencies.writeTempConfigFile ?? writeTempConfigFile
-    this.pipeName = dependencies.pipeName ?? PIPE_NAME
+    this.pipeName = dependencies.pipeName
     this.listCameras = dependencies.listCameras ?? listIrisCameras
   }
 
@@ -171,17 +214,45 @@ export class ProcessManager {
   // what was configured unchanged. Otherwise, rather than asking IRIS to
   // open a camera_ids index it doesn't have (which fails pipeline startup),
   // continue with however many cameras IRIS itself confirmed it can open.
+  async getCaptureCameras(): Promise<IrisCameraDevice[] | null> {
+    const cameras = await this.listCameras(this.getExecutablePath())
+    if (cameras === null) return null
+    return cameras.map(camera => {
+      const key = camera.devicePath
+      const modes = camera.modes?.length ? camera.modes : key ? this.cameraProfiles.get(key)?.modes ?? camera.modes : camera.modes
+      const profile = { ...camera, modes }
+      if (key) this.cameraProfiles.set(key, profile)
+      return profile
+    })
+  }
+
   private async reconcileCameras(
     cameras: NonNullable<StartIrisRunInput['cameras']>,
+    settings = captureSettings(cameras),
   ): Promise<NonNullable<StartIrisRunInput['cameras']>> {
     if (cameras.length === 0) return cameras
 
     let irisCameras: IrisCameraDevice[] | null
     try {
-      irisCameras = await this.listCameras(this.getExecutablePath())
+      irisCameras = await this.getCaptureCameras()
     } catch (error) {
       console.warn('[iris:cameras] failed to query IRIS\'s camera list -- continuing with the configured cameras as-is:', error)
       return cameras
+    }
+
+    if (cameras.some(camera => camera.devicePath)) {
+      if (irisCameras === null) throw new Error('Could not verify the selected capture devices. Retry camera discovery.')
+      const mapped = cameras.map(camera => {
+        const matches = irisCameras.filter(native => native.devicePath === camera.devicePath)
+        if (matches.length !== 1) throw new Error(`${camera.label ?? 'Selected camera'} is no longer available. Reopen camera setup.`)
+        const native = matches[0]
+        if (native.modes?.length && !usableModes(native.modes).some(mode => mode.width === settings.width &&
+            mode.height === settings.height && sameFps(modeFps(mode), settings.fps)))
+          throw new Error(`${camera.label ?? native.name} does not support ${settings.width}x${settings.height} at ${settings.fps} FPS in MJPEG.`)
+        return { ...camera, id: native.index }
+      })
+      if (new Set(mapped.map(camera => camera.id)).size !== mapped.length) throw new Error('A capture device was selected more than once')
+      return mapped
     }
 
     if (irisCameras === null || irisCameras.length === cameras.length) return cameras
@@ -192,10 +263,6 @@ export class ProcessManager {
         `continuing with the first ${usable} camera(s) IRIS can actually open instead of failing startup.`,
     )
     return cameras.slice(0, usable)
-  }
-
-  private videoPipeName(cameraIndex: number): string {
-    return `\\\\.\\pipe\\iris_video_${cameraIndex}`
   }
 
   private emitStatus(partial: Partial<IrisDispatcherStatus> = {}): void {
@@ -228,7 +295,7 @@ export class ProcessManager {
 
   async startRun(input: StartIrisRunInput = {}): Promise<{ ok: boolean; runId: string | null; state: IrisDispatcherState; runCount: number; failed: boolean; error?: string }> {
     const runId = input.run_id ?? `run-${Date.now()}`
-    await this.runStore?.create(runId, input.cameras?.length ?? 0)
+    await this.runStore?.create(runId, input.cameras?.length ?? 0, input.pose_model ?? DEFAULT_POSE_MODEL)
 
     const cliPath = this.getExecutablePath()
     if (!this.pathExists(cliPath)) {
@@ -254,7 +321,18 @@ export class ProcessManager {
       }
     }
 
-    const cameras = await this.reconcileCameras(input.cameras ?? [])
+    let cameras: NonNullable<StartIrisRunInput['cameras']>
+    let settings: ReturnType<typeof captureSettings>
+    try {
+      poseModel(input.pose_model)
+      settings = captureSettings(input.cameras ?? [], input)
+      cameras = await this.reconcileCameras(input.cameras ?? [], settings)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.emitStatus({ state: 'failed', failed: true, runId: null, error: message, capture: [] })
+      await this.runStore?.update(runId, { state: 'failed', error: message })
+      return { ok: false, runId: null, state: this.status.state, runCount: this.status.runCount, failed: true, error: message }
+    }
 
     this.emitStatus({
       state: 'starting',
@@ -264,15 +342,19 @@ export class ProcessManager {
       previewOpen: false,
       stopping: false,
       failed: false,
+      error: undefined,
+      capture: [],
     })
 
     const runner = await this.startStandard({
       sessionId: runId,
       options: {
         run_id: runId,
-        camera_width: input.camera_width ?? 1920,
-        camera_height: input.camera_height ?? 1080,
-        video_fps: input.video_fps ?? 30,
+        roi_mode: input.roi_mode,
+        pose_model: input.pose_model,
+        camera_width: settings.width,
+        camera_height: settings.height,
+        video_fps: settings.fps,
         cameras,
         verbose: input.verbose ?? false,
         profileFile: input.profileFile,
@@ -304,6 +386,7 @@ export class ProcessManager {
     this.emitStatus({ state: 'running', runId, previewOpen: false, previewMonitorAttached: false, failed: false })
     await this.runStore?.update(runId, { state: 'recording' })
 
+    this.activePoseModel = poseModel(input.pose_model).id
     return {
       ok: true,
       runId,
@@ -332,7 +415,7 @@ export class ProcessManager {
     const videoStreams = await this.videoRelay.start(cameraIndices)
     const videoPipes = cameraIndices.map((cameraIndex) => ({
       cameraIndex,
-      pipePath: this.videoPipeName(cameraIndex),
+      pipePath: uniquePipeName(`iris_video_${cameraIndex}`),
     }))
 
     const monitorOptions = {
@@ -383,12 +466,15 @@ export class ProcessManager {
   }
 
   async stopAll(): Promise<void> {
+    this.activePoseModel = undefined
     this.emitStatus({
       state: 'stopping',
       stopping: true,
       previewMonitorAttached: false,
       previewOpen: false,
       failed: false,
+      capture: [],
+      error: undefined,
     })
 
     const sessions = [...this.workers.keys()]
@@ -415,18 +501,44 @@ export class ProcessManager {
     console.log(`[iris:run:${sessionId}] step 1/3 done -- ${cliPath}`)
 
     console.log(`[iris:run:${sessionId}] step 2/3 -- writing pipeline spec (run_id, runtime, shared, pipeline incl. auto-calibration config)`)
-    const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
+    const config = buildConfigFromOptions(options)
+    const calibration = config.pipeline.triangulation.da3_startup_calibration
+    calibration.output_dir = path.join(calibration.output_dir, randomUUID()).replaceAll('\\', '/')
+    calibration.save_ply = 'scene.ply'
+    const { tmpDir, cfgPath } = this.createTempConfig(config)
     console.log(`[iris:run:${sessionId}] step 2/3 done -- ${cfgPath}`)
+    this.roiClient?.close()
+    const controlPipe = uniquePipeName('iris_roi')
+    this.roiClient = new RoiClient(controlPipe, options.run_id ?? sessionId)
+    const runRoiClient = this.roiClient
+    this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
-    const child = this.spawnProcess(cliPath, ['run', cfgPath], {
+    const child = this.spawnProcess(cliPath, ['run', cfgPath, '--control-pipe', controlPipe], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     console.log(`[iris:run:${sessionId}] step 3/3 done -- pid ${child.pid}; this process stays alive for capture, auto-calibration, and live mocap -- watching stdout for milestones`)
 
+    let captureOutput = ''
     child.stdout!.on('data', (chunk) => {
       const text = chunk.toString()
+      captureOutput += text
+      const lines = captureOutput.split(/\r?\n/)
+      captureOutput = lines.pop()!.slice(-65536)
+      for (const line of lines) {
+        if (this.roiClient !== runRoiClient || !line.startsWith('IRIS_CAPTURE_SETTINGS ')) continue
+        try {
+          const value: NegotiatedCapture = JSON.parse(line.slice('IRIS_CAPTURE_SETTINGS '.length))
+          if (!Number.isInteger(value.cameraId) || !Number.isInteger(value.width) || value.width < 1 ||
+              !Number.isInteger(value.height) || value.height < 1 || !Number.isInteger(value.fpsNumerator) || value.fpsNumerator < 1 ||
+              !Number.isInteger(value.fpsDenominator) || value.fpsDenominator < 1 || typeof value.format !== 'string') continue
+          if (!config.shared.camera_groups.capture_rig.camera_ids.includes(value.cameraId) ||
+              value.width !== config.runtime.buffers.camera_width || value.height !== config.runtime.buffers.camera_height ||
+              !sameFps(modeFps(value), config.shared.camera_groups.capture_rig.fps) || value.format !== 'MJPEG') continue
+          this.emitStatus({ capture: [...this.status.capture?.filter(c => c.cameraId !== value.cameraId) ?? [], value] })
+        } catch { /* Other CLI output is not a capture descriptor. */ }
+      }
       logIrisMilestones(`run:${sessionId}`, text)
       onCliOutput?.({ channel: 'run:stdout', line: text })
     })
@@ -436,11 +548,18 @@ export class ProcessManager {
     })
 
     child.on('error', (error) => {
+      runRoiClient.close()
+      if (this.roiClient === runRoiClient) { this.roiClient = null; this.da3Scene = null }
       console.error(`[iris:run:${sessionId}] start failed`, error)
+      if (this.status.runId === sessionId) this.emitStatus({ state: 'failed', failed: true, error: error.message, capture: [] })
     })
 
     child.on('exit', (code, signal) => {
+      runRoiClient.close()
+      if (this.roiClient === runRoiClient) { this.roiClient = null; this.da3Scene = null }
       console.log(`[iris:run:${sessionId}] run process exited (code=${code}, signal=${signal})`)
+      if (this.status.runId === sessionId && this.status.state !== 'stopping')
+        this.emitStatus({ state: 'failed', failed: true, error: `IRIS capture stopped (exit ${code ?? signal}). Check camera settings and availability.`, capture: [] })
     })
 
     this.workers.set(sessionId, { child, isRun: true })
@@ -455,6 +574,12 @@ export class ProcessManager {
   }
 
   async startStream({ sessionId, options, onCliOutput, onFrame }: ProcessStartOptions) {
+    const requestedFps = options.targetFps ?? captureSettings(options.cameras ?? [], options).fps
+    if (!Number.isFinite(requestedFps) || requestedFps < 1 || requestedFps > 480)
+      throw new Error('Monitor FPS must be between 1 and 480')
+    // Core's monitor accepts integer FPS. Round up so fractional capture rates
+    // are not throttled below their requested rate; capture keeps its exact ratio.
+    const monitorFps = Math.ceil(requestedFps)
     console.log(`[iris:monitor:${sessionId}] Starting stream with options:`, options)
     console.log(`[iris:monitor:${sessionId}] step 1/4 -- resolving iris_cli.exe`)
     const cliPath = this.getExecutablePath()
@@ -475,11 +600,12 @@ export class ProcessManager {
     }
 
     const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
-    const posePipePath: string = options.posePipePath ?? this.pipeName
+    const modelId = this.activePoseModel
+    const runId = this.status.runId
+    const posePipePath: string = options.posePipePath ?? this.pipeName ?? uniquePipeName('iris_pose')
     const shmName: string = options.sharedMemoryName ?? 'iris_shm_ipc'
     const videoPipes: Array<{ cameraIndex: number; pipePath: string }> = options.videoPipes ?? []
     const outputDirectory: string | undefined = options.outputDirectory
-    const targetFps: number | undefined = options.targetFps
 
     let pipeServer: Awaited<ReturnType<typeof createPipeServer>> | null = null
     const videoPipeServers: NetServer[] = []
@@ -492,7 +618,11 @@ export class ProcessManager {
       console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${posePipePath}`)
       pipeServer = await this.openPipeServer({
         pipeName: posePipePath,
-        onFrame: (frame) => onFrame?.(frame),
+        // Each parsed frame is a fresh object, so tag it in place instead of copying.
+        onFrame: (frame) => {
+          if (frame && typeof frame === 'object') Object.assign(frame, { pose_model: modelId, run_id: runId })
+          onFrame?.(frame)
+        },
       })
       console.log(`[iris:monitor:${sessionId}] step 2/4 done -- named pipe listening`)
 
@@ -501,20 +631,17 @@ export class ProcessManager {
         for (const vp of videoPipes) {
           const videoPipeServer = await this.openVideoPipeReader({
             pipeName: vp.pipePath,
-            onChunk: (frame) => this.videoRelay.push(frame.cameraId, frame.payload),
+            onAccessUnit: (accessUnit) => this.videoRelay.push(accessUnit.cameraId, accessUnit.data),
           })
           videoPipeServers.push(videoPipeServer)
         }
       }
 
-      const args = ['monitor', '--shm-name', shmName, '--pipe', posePipePath]
+      const args = ['monitor', '--shm-name', shmName, '--pipe', posePipePath, '--fps', String(monitorFps)]
       // Writes recording_cam<N>.mp4 per camera for rig calibration capture.
       // Not set during ordinary live preview.
       if (outputDirectory) {
         args.push('--output-dir', outputDirectory)
-      }
-      if (targetFps) {
-        args.push('--fps', String(targetFps))
       }
       for (const vp of videoPipes) {
         args.push('--video-pipe', `${vp.cameraIndex}:${vp.pipePath}`)
@@ -574,6 +701,7 @@ export class ProcessManager {
 
   async stop(sessionId: string) {
     const entry = this.workers.get(sessionId)
+    if (entry?.isRun && this.roiClient?.runId === sessionId) { this.roiClient.close(); this.roiClient = null; this.da3Scene = null }
     if (!entry) {
       console.log(`[iris:${sessionId}] stop requested but no worker is running`)
       return { ok: false, error: 'not_found' }
@@ -587,7 +715,7 @@ export class ProcessManager {
       const child = entry.child
       let settled = false
 
-      child.once('exit', () => {
+      const onExit = () => {
         if (settled) return
         settled = true
         console.log(`[iris:${sessionId}] stopped`)
@@ -596,7 +724,13 @@ export class ProcessManager {
           void this.runStore?.update(sessionId, { state: 'stopped' })
         }
         resolve({ ok: true, sessionId })
-      })
+      }
+
+      if (child.exitCode !== null || child.signalCode !== null) {
+        onExit()
+        return
+      }
+      child.once('exit', onExit)
 
       // Monitor sessions support a graceful "stop\n" over stdin, so mp4
       // files get finalized properly. Escalate to signals if it hangs.
