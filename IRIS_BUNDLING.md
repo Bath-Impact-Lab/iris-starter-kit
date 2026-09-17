@@ -106,7 +106,17 @@ If you already ran the official installer, you don't need any of this;
 just `npm run dev` (see "Installing IRIS" above). These are for pointing
 the app at a locally-built IRIS instead.
 
-### Option A: Use Environment Variable
+### Option A: Use `.env.local` (recommended)
+
+Copy `.env.example` to `.env.local` (gitignored) and set `IRIS_CLI_PATH`,
+`IRIS_HOME` and/or `IRIS_MODELS_DIR`. It's loaded at startup in development
+only; shell variables take precedence.
+
+```dotenv
+IRIS_CLI_PATH=C:/path/to/IRIS/build/bin/iris_cli.exe
+```
+
+### Option A2: Use Environment Variable
 
 ```powershell
 $env:IRIS_CLI_PATH = "C:\path\to\IRIS\build\bin\iris_cli.exe"
