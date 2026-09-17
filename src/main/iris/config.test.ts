@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildConfigFromOptions, PIPE_NAME } from './config.js';
+import { buildConfigFromOptions, uniquePipeName } from './config.js';
 import { ProcessManager } from './processManager.js';
 
 describe('config', () => {
-  it('PIPE_NAME uses the double-backslash Windows named pipe device format', () => {
-    expect(PIPE_NAME).toBe('\\\\.\\pipe\\iris_ipc');
+  it('uniquePipeName uses the Windows named pipe device format with a unique suffix', () => {
+    const name = uniquePipeName('iris_pose');
+    expect(name).toMatch(/^\\\\\.\\pipe\\iris_pose_[0-9a-f-]{36}$/);
+    expect(uniquePipeName('iris_pose')).not.toBe(name);
   });
 
   it('buildConfigFromOptions matches the IRIS spec top-level shape (run_id/runtime/shared/pipeline)', () => {

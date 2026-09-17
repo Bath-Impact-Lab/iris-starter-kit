@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveIrisExecutable } from './resolveIrisExecutable.js';
@@ -38,7 +39,11 @@ function isElectronAppPackaged(): boolean {
   }
 }
 
-export const PIPE_NAME = '\\\\.\\pipe\\iris_ipc';
+// Unique per session: a fixed name collides with a second app instance or a
+// server that hasn't released it yet, and a predictable one can be squatted.
+export function uniquePipeName(prefix: string): string {
+  return `\\\\.\\pipe\\${prefix}_${randomUUID()}`;
+}
 
 function getAppDataPath(): string {
   const envAppData = process.env.APPDATA || process.env.LOCALAPPDATA;
