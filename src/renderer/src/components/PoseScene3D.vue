@@ -84,6 +84,10 @@ function buildScene(container: HTMLElement): void {
   const animate = (): void => {
     animationFrameId = requestAnimationFrame(animate);
     controls?.update();
+    if (poseChanged) {
+      poseChanged = false;
+      updateScene();
+    }
     if (renderer && scene && camera) renderer.render(scene, camera);
   };
   animationFrameId = requestAnimationFrame(animate);
@@ -183,7 +187,11 @@ function updateScene(): void {
   }
 }
 
-watch(() => props.pose, updateScene);
+// Pose frames can arrive faster than the display refreshes, and updateScene
+// is not cheap. Apply only the newest pose, right before the next render,
+// so no work is spent on poses that are never drawn.
+let poseChanged = false;
+watch(() => props.pose, () => { poseChanged = true; });
 
 // scale/boneThickness are picked up on the next updateScene() call, which this triggers immediately.
 watch(() => props.settings, updateScene, { deep: true });

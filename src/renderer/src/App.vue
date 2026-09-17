@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { captureSettings, modeFps, type NegotiatedCapture } from '../../shared/capture';
 import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from './types';
 import { countValidKeypoints, extractKeypoints2D } from './utils/pose';
@@ -101,7 +101,9 @@ watch(
 );
 const liveFps = ref(0);
 const liveJoints = ref<{ valid: number; total: number }>({ valid: 0, total: poseModel(selectedPoseModel.value).keypoints });
-const livePose = ref<PoseFrame | null>(null);
+// Shallow: a pose frame is replaced wholesale and never mutated, so deep
+// reactive proxies over every joint would be pure overhead.
+const livePose = shallowRef<PoseFrame | null>(null);
 const videoStreams = ref<VideoStreamDescriptor[]>([]);
 // IRIS bakes camera 0's rotation into the raw capture before anything else touches it, so the
 // video we receive already reflects whatever this was set to at the last real run start -- not
@@ -143,7 +145,7 @@ onMounted(() => {
       const incoming = frame as PoseFrame;
       if (!activeRunId.value || incoming?.run_id !== activeRunId.value) return;
       livePose.value = incoming;
-      liveJoints.value = extractPoseCount(livePose.value);
+      liveJoints.value = extractPoseCount(incoming);
       liveFps.value = recordFrameArrival();
     });
   }

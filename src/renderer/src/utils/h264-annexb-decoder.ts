@@ -1,15 +1,16 @@
-const MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+import { inspectAccessUnit } from '../../../shared/h264';
 
 export type DecoderStatus = 'connecting' | 'streaming' | 'failed';
 
-// Decodes IRIS's raw H.264 Annex-B video-pipe stream via WebCodecs, reading
-// the codec profile/level from the stream's own SPS NAL rather than
-// hardcoding it.
+// Decodes IRIS's raw H.264 Annex-B video stream via WebCodecs, reading the
+// codec profile/level from the stream's own SPS NAL rather than hardcoding it.
+// The main-process relay sends exactly one access unit per WebSocket message
+// (see videoPipeReader.ts), so each message is decoded as soon as it arrives
+// instead of waiting for the next frame's start code.
 export class H264AnnexBDecoder {
   private socket: WebSocket | null = null;
   private decoder: VideoDecoder | null = null;
-  private buffer: Uint8Array = new Uint8Array(0);
-  private accessUnit: Uint8Array[] = [];
+  private pendingParameterSets: Uint8Array | null = null;
   private receivedKeyframe = false;
   private timestamp = 0;
 
@@ -40,8 +41,7 @@ export class H264AnnexBDecoder {
     this.socket = null;
     if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
     this.decoder = null;
-    this.buffer = new Uint8Array(0);
-    this.accessUnit = [];
+    this.pendingParameterSets = null;
     this.receivedKeyframe = false;
   }
 
@@ -65,48 +65,31 @@ export class H264AnnexBDecoder {
     this.decoder = decoder;
   }
 
-  private push(chunk: Uint8Array): void {
-    const joined = concatenate(this.buffer, chunk);
-    let current = findStartCode(joined, 0);
+  private push(accessUnit: Uint8Array): void {
+    const { keyframe, hasPicture, sps } = inspectAccessUnit(accessUnit);
+    if (sps) this.configureFromSps(sps);
 
-    while (current) {
-      const next = findStartCode(joined, current.index + current.length);
-      if (!next) break;
-
-      const nalu = joined.slice(current.index, next.index);
-      const type = joined[current.index + current.length]! & 0x1f;
-      if (type === 7) this.configureFromSps(nalu.slice(current.length));
-
-      this.accessUnit.push(nalu);
-      if (type === 1 || type === 5) this.decodeAccessUnit(type === 5);
-      current = next;
+    // Parameter sets sent on their own belong to the next picture.
+    if (!hasPicture) {
+      this.pendingParameterSets = accessUnit;
+      return;
     }
+    const data = this.pendingParameterSets ? concatenate(this.pendingParameterSets, accessUnit) : accessUnit;
+    this.pendingParameterSets = null;
 
-    this.buffer = current
-      ? joined.slice(current.index)
-      : joined.length <= MAX_BUFFER_BYTES
-        ? joined
-        : new Uint8Array(0);
-  }
-
-  private decodeAccessUnit(keyframe: boolean): void {
     const decoder = this.decoder;
     if (!decoder || decoder.state !== 'configured') return;
 
-    if (keyframe) this.receivedKeyframe = true;
-    if (!this.receivedKeyframe || decoder.decodeQueueSize > 2) {
-      this.accessUnit = [];
+    if (keyframe) {
+      this.receivedKeyframe = true;
+    } else if (!this.receivedKeyframe) {
+      return;
+    } else if (decoder.decodeQueueSize > 2) {
+      // Every later delta frame references this one, so decoding past a gap
+      // smears until the next keyframe. Wait for it instead.
+      this.receivedKeyframe = false;
       return;
     }
-
-    const size = this.accessUnit.reduce((total, nalu) => total + nalu.length, 0);
-    const data = new Uint8Array(size);
-    let offset = 0;
-    for (const nalu of this.accessUnit) {
-      data.set(nalu, offset);
-      offset += nalu.length;
-    }
-    this.accessUnit = [];
 
     decoder.decode(
       new EncodedVideoChunk({
@@ -123,13 +106,4 @@ function concatenate(left: Uint8Array, right: Uint8Array): Uint8Array {
   joined.set(left);
   joined.set(right, left.length);
   return joined;
-}
-
-function findStartCode(buffer: Uint8Array, offset: number): { index: number; length: number } | null {
-  for (let index = offset; index < buffer.length - 2; index += 1) {
-    if (buffer[index] !== 0 || buffer[index + 1] !== 0) continue;
-    if (buffer[index + 2] === 1) return { index, length: 3 };
-    if (buffer[index + 2] === 0 && buffer[index + 3] === 1) return { index, length: 4 };
-  }
-  return null;
 }

@@ -2,7 +2,7 @@ import { DEFAULT_POSE_MODEL, poseModel, type PoseModelId } from '../../shared/po
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
-import { PIPE_NAME, buildConfigFromOptions, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
+import { buildConfigFromOptions, uniquePipeName, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
 import { createPipeServer } from './pipeServer.js'
 import { createVideoPipeReader } from './videoPipeReader.js'
 import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
@@ -143,7 +143,7 @@ export class ProcessManager {
   private readonly openVideoPipeReader: NonNullable<ProcessManagerDependencies['createVideoPipeReader']>
   private readonly videoRelay: VideoRelayServer
   private readonly createTempConfig: NonNullable<ProcessManagerDependencies['writeTempConfigFile']>
-  private readonly pipeName: string
+  private readonly pipeName: string | undefined
   private readonly listCameras: NonNullable<ProcessManagerDependencies['listCameras']>
   private cameraProfiles = new Map<string, IrisCameraDevice>()
   private status: IrisDispatcherStatus = {
@@ -201,7 +201,7 @@ export class ProcessManager {
     this.openVideoPipeReader = dependencies.createVideoPipeReader ?? createVideoPipeReader
     this.videoRelay = dependencies.videoRelayServer ?? new VideoRelayServer()
     this.createTempConfig = dependencies.writeTempConfigFile ?? writeTempConfigFile
-    this.pipeName = dependencies.pipeName ?? PIPE_NAME
+    this.pipeName = dependencies.pipeName
     this.listCameras = dependencies.listCameras ?? listIrisCameras
   }
 
@@ -263,10 +263,6 @@ export class ProcessManager {
         `continuing with the first ${usable} camera(s) IRIS can actually open instead of failing startup.`,
     )
     return cameras.slice(0, usable)
-  }
-
-  private videoPipeName(cameraIndex: number): string {
-    return `\\\\.\\pipe\\iris_video_${cameraIndex}`
   }
 
   private emitStatus(partial: Partial<IrisDispatcherStatus> = {}): void {
@@ -419,7 +415,7 @@ export class ProcessManager {
     const videoStreams = await this.videoRelay.start(cameraIndices)
     const videoPipes = cameraIndices.map((cameraIndex) => ({
       cameraIndex,
-      pipePath: this.videoPipeName(cameraIndex),
+      pipePath: uniquePipeName(`iris_video_${cameraIndex}`),
     }))
 
     const monitorOptions = {
@@ -512,7 +508,7 @@ export class ProcessManager {
     const { tmpDir, cfgPath } = this.createTempConfig(config)
     console.log(`[iris:run:${sessionId}] step 2/3 done -- ${cfgPath}`)
     this.roiClient?.close()
-    const controlPipe = `\\\\.\\pipe\\iris_roi_${randomUUID()}`
+    const controlPipe = uniquePipeName('iris_roi')
     this.roiClient = new RoiClient(controlPipe, options.run_id ?? sessionId)
     const runRoiClient = this.roiClient
     this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
@@ -606,7 +602,7 @@ export class ProcessManager {
     const { tmpDir, cfgPath } = this.createTempConfig(buildConfigFromOptions(options))
     const modelId = this.activePoseModel
     const runId = this.status.runId
-    const posePipePath: string = options.posePipePath ?? this.pipeName
+    const posePipePath: string = options.posePipePath ?? this.pipeName ?? uniquePipeName('iris_pose')
     const shmName: string = options.sharedMemoryName ?? 'iris_shm_ipc'
     const videoPipes: Array<{ cameraIndex: number; pipePath: string }> = options.videoPipes ?? []
     const outputDirectory: string | undefined = options.outputDirectory
@@ -622,9 +618,11 @@ export class ProcessManager {
       console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${posePipePath}`)
       pipeServer = await this.openPipeServer({
         pipeName: posePipePath,
-        onFrame: (frame) => onFrame?.(frame && typeof frame === 'object'
-          ? { ...frame, pose_model: modelId, run_id: runId }
-          : frame),
+        // Each parsed frame is a fresh object, so tag it in place instead of copying.
+        onFrame: (frame) => {
+          if (frame && typeof frame === 'object') Object.assign(frame, { pose_model: modelId, run_id: runId })
+          onFrame?.(frame)
+        },
       })
       console.log(`[iris:monitor:${sessionId}] step 2/4 done -- named pipe listening`)
 
@@ -633,7 +631,7 @@ export class ProcessManager {
         for (const vp of videoPipes) {
           const videoPipeServer = await this.openVideoPipeReader({
             pipeName: vp.pipePath,
-            onChunk: (frame) => this.videoRelay.push(frame.cameraId, frame.payload),
+            onAccessUnit: (accessUnit) => this.videoRelay.push(accessUnit.cameraId, accessUnit.data),
           })
           videoPipeServers.push(videoPipeServer)
         }

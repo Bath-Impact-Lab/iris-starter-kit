@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { createVideoFrameParser, IPC_FRAME_HEADER_SIZE, IPC_FRAME_MAGIC, type VideoFrameChunk } from './videoPipeReader.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CORE_AVIO_CHUNK_BYTES, createAccessUnitAssembler, createVideoFrameParser, IPC_FRAME_HEADER_SIZE, IPC_FRAME_MAGIC, type VideoAccessUnit, type VideoFrameChunk } from './videoPipeReader.js'
 
 function buildFrame(cameraId: number, payload: Buffer): Buffer {
   const header = Buffer.alloc(IPC_FRAME_HEADER_SIZE)
@@ -63,5 +63,63 @@ describe('createVideoFrameParser', () => {
     expect(chunks).toHaveLength(1)
     expect(chunks[0]?.cameraId).toBe(3)
     expect(chunks[0]?.payload.toString()).toBe('recovered')
+  })
+})
+
+function chunkOf(payload: Buffer, timestampMs = 1000n): VideoFrameChunk {
+  return { cameraId: 1, frameIndex: 0n, timestampMs, width: 1920, height: 1080, payload }
+}
+
+describe('createAccessUnitAssembler', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('emits a chunk shorter than the Core AVIO buffer as a whole access unit', () => {
+    const units: VideoAccessUnit[] = []
+    const assembler = createAccessUnitAssembler((unit) => units.push(unit))
+
+    assembler.push(chunkOf(Buffer.from('small-frame')))
+
+    expect(units).toHaveLength(1)
+    expect(units[0]?.data.toString()).toBe('small-frame')
+  })
+
+  it('joins full AVIO chunks with the shorter tail that ends the packet', () => {
+    const units: VideoAccessUnit[] = []
+    const assembler = createAccessUnitAssembler((unit) => units.push(unit))
+    const full = Buffer.alloc(CORE_AVIO_CHUNK_BYTES, 1)
+
+    assembler.push(chunkOf(full))
+    assembler.push(chunkOf(full))
+    expect(units).toHaveLength(0)
+    assembler.push(chunkOf(Buffer.from([2, 2, 2])))
+
+    expect(units).toHaveLength(1)
+    expect(units[0]?.data.length).toBe(2 * CORE_AVIO_CHUNK_BYTES + 3)
+  })
+
+  it('flushes a packet that is an exact multiple of the AVIO buffer once the pipe goes idle', () => {
+    vi.useFakeTimers()
+    const units: VideoAccessUnit[] = []
+    const assembler = createAccessUnitAssembler((unit) => units.push(unit), 5)
+
+    assembler.push(chunkOf(Buffer.alloc(CORE_AVIO_CHUNK_BYTES)))
+    vi.advanceTimersByTime(4)
+    expect(units).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+
+    expect(units).toHaveLength(1)
+    expect(units[0]?.data.length).toBe(CORE_AVIO_CHUNK_BYTES)
+  })
+
+  it('drops a partial access unit on discard', () => {
+    vi.useFakeTimers()
+    const units: VideoAccessUnit[] = []
+    const assembler = createAccessUnitAssembler((unit) => units.push(unit), 5)
+
+    assembler.push(chunkOf(Buffer.alloc(CORE_AVIO_CHUNK_BYTES)))
+    assembler.discard()
+    vi.advanceTimersByTime(10)
+
+    expect(units).toHaveLength(0)
   })
 })

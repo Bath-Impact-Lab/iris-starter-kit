@@ -15,11 +15,28 @@ export interface VideoFrameChunk {
   payload: Buffer;
 }
 
+export interface VideoAccessUnit {
+  cameraId: number;
+  timestampMs: bigint;
+  width: number;
+  height: number;
+  data: Buffer;
+}
+
 export interface VideoPipeReaderOptions {
   pipeName: string;
-  onChunk: (chunk: VideoFrameChunk) => void;
+  onAccessUnit: (accessUnit: VideoAccessUnit) => void;
   createServer?: typeof net.createServer;
 }
+
+// Core's GpuVideoWriter (core/knect/gpu_writer.cpp) flushes after every
+// encoded packet, but through a 32 KiB AVIO buffer: a larger packet (typically
+// a keyframe) arrives as several full 32 KiB chunks, each with its own header,
+// followed by a shorter tail. So a chunk shorter than the buffer ends a frame.
+// A packet that is an exact multiple of 32 KiB has no tail; that full chunk is
+// flushed once nothing follows it for IDLE_FLUSH_MS. Keep in sync with Core.
+export const CORE_AVIO_CHUNK_BYTES = 32 * 1024;
+const IDLE_FLUSH_MS = 5;
 
 function findMagic(buffer: Buffer, from: number): number {
   for (let index = from; index <= buffer.length - 4; index += 1) {
@@ -61,12 +78,50 @@ export function createVideoFrameParser(onChunk: (chunk: VideoFrameChunk) => void
   };
 }
 
-export function createVideoPipeReader({ pipeName, onChunk, createServer = net.createServer }: VideoPipeReaderOptions): Promise<net.Server> {
+// Joins the chunks of one encoded packet back into a single access unit.
+export function createAccessUnitAssembler(
+  onAccessUnit: (accessUnit: VideoAccessUnit) => void,
+  idleFlushMs = IDLE_FLUSH_MS,
+) {
+  let parts: VideoFrameChunk[] = [];
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+  };
+
+  const flush = () => {
+    clearIdleTimer();
+    const first = parts[0];
+    if (!first) return;
+    const data = parts.length === 1 ? first.payload : Buffer.concat(parts.map((part) => part.payload));
+    parts = [];
+    onAccessUnit({ cameraId: first.cameraId, timestampMs: first.timestampMs, width: first.width, height: first.height, data });
+  };
+
+  return {
+    push(chunk: VideoFrameChunk): void {
+      clearIdleTimer();
+      parts.push(chunk);
+      if (chunk.payload.length !== CORE_AVIO_CHUNK_BYTES) flush();
+      else idleTimer = setTimeout(flush, idleFlushMs);
+    },
+    discard(): void {
+      clearIdleTimer();
+      parts = [];
+    },
+  };
+}
+
+export function createVideoPipeReader({ pipeName, onAccessUnit, createServer = net.createServer }: VideoPipeReaderOptions): Promise<net.Server> {
   return new Promise((resolve, reject) => {
     const server = createServer((stream) => {
-      const push = createVideoFrameParser(onChunk);
+      const assembler = createAccessUnitAssembler(onAccessUnit);
+      const push = createVideoFrameParser(assembler.push);
 
       stream.on('data', (chunk) => push(chunk));
+      stream.on('close', () => assembler.discard());
       stream.on('error', (error) => {
         console.error('[video-pipe] stream error:', error);
       });

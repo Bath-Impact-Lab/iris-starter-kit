@@ -58,6 +58,24 @@ function sendToSender(sender: Electron.WebContents, channel: string, payload: un
   }
 }
 
+// Pose frames arrive in bursts (several JSON lines per pipe read), and
+// webContents.send has no backpressure. Sending only the newest frame of each
+// burst keeps the renderer from queueing frames it would never display.
+function latestFrameSender(sender: Electron.WebContents, channel: string) {
+  let latest: unknown;
+  let scheduled = false;
+  return (frame: unknown) => {
+    latest = frame;
+    if (scheduled) return;
+    scheduled = true;
+    setImmediate(() => {
+      scheduled = false;
+      sendToSender(sender, channel, latest);
+      latest = undefined;
+    });
+  };
+}
+
 function emitStatusToAllWindows(processManager: ProcessManager) {
   const status = processManager.getStatus();
   for (const win of BrowserWindow.getAllWindows()) {
@@ -116,7 +134,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
     const result = await processManager.startRun({
       ...input,
       ...(extrinsicsFile ? { extrinsics_file: extrinsicsFile } : {}),
-      roi_mode: roiStore.load()?.mode === 'automatic' ? 'automatic' : 'off',
+      roi_mode: 'off',
     });
     return {
       ok: result.ok,
@@ -153,7 +171,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
   });
 
   ipcMain.handle('iris:open-preview-monitor', async (event, input = {}) => {
-    const { videoStreams } = await processManager.openPreviewMonitor(input, (frame) => sendToSender(event.sender, 'iris:pose', frame));
+    const { videoStreams } = await processManager.openPreviewMonitor(input, latestFrameSender(event.sender, 'iris:pose'));
     return { ...processManager.getStatus(), videoStreams };
   });
 
@@ -173,7 +191,7 @@ export function registerIpcHandlers(processManager: ProcessManager): void {
       sessionId: runId,
       options,
       onCliOutput: (payload) => sendToSender(event.sender, 'iris:cli-output', payload),
-      onFrame: (frame) => sendToSender(event.sender, 'iris:pose', frame),
+      onFrame: latestFrameSender(event.sender, 'iris:pose'),
     });
 
     return result;
