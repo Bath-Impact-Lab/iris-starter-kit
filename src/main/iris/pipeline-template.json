@@ -27,7 +27,7 @@
           "type": "yolox",
           "yolox_input_width": 640,
           "yolox_input_height": 640,
-          "yolox_conf_threshold": 0.7,
+          "yolox_conf_threshold": 0.1,
           "yolox_iou_threshold": 0.45
         }
       },
@@ -50,7 +50,7 @@
       "detection": {
         "batch_size": 16,
         "detection_skip_enabled": true,
-        "detection_skip_frames": 20
+        "detection_skip_frames": 5
       },
       "output": {
         "shm_name": "iris_shm_ipc",
