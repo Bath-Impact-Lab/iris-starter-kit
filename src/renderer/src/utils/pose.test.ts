@@ -30,6 +30,16 @@ describe('pose layouts', () => {
     expect(points[0]).toBeNull();
   });
 
+  it('extracts a requested person instead of always using the first person', () => {
+    const second = { person_id: 9, joint_centers: [[9, 8, 7] as [number, number, number]] };
+    const frame: PoseFrame = {
+      pose_model: 'rtmpose-halpe26',
+      people: [{ person_id: 4, joint_centers: [[1, 2, 3]] }, second],
+    };
+
+    expect(extractJointCenters3D(frame, second)[0]).toMatchObject({ x: 9, y: 8, z: 7 });
+  });
+
   it('connects only existing joints without duplicate names', () => {
     for (const layout of Object.values(SKELETONS)) {
       const names = new Set(layout.names);

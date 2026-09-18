@@ -30,7 +30,30 @@ describe('config', () => {
     expect(config.shared.camera_groups.capture_rig.camera_ids.length).toBe(2);
     expect(config.shared.camera_groups.capture_rig.fps).toBe(30);
     expect(config.pipeline.triangulation.da3_startup_calibration.model_type).toBe('base');
+    expect(config.pipeline.global_reid_tracking.single_person_mode).toBe(false);
+    expect(config.shared.models.detection.yolox_people.yolox_conf_threshold).toBe(0.1);
+    expect(config.shared.defaults.detection).toMatchObject({ detection_skip_enabled: false, detection_skip_frames: 1 });
+    expect(config.pipeline.global_reid_tracking.spawn).toMatchObject({
+      require_multi_camera_spawn: true,
+      min_supporting_cameras: 2,
+    });
     expect('calibration' in config.pipeline).toBe(false);
+  });
+
+  it('uses primary-person output and a conservative detector cadence in single mode', () => {
+    const config = buildConfigFromOptions({ tracking_mode: 'single', cameras: [{ id: 0 }, { id: 1 }] });
+
+    expect(config.pipeline.global_reid_tracking.single_person_mode).toBe(true);
+    expect(config.shared.defaults.detection).toMatchObject({ detection_skip_enabled: true, detection_skip_frames: 2 });
+  });
+
+  it('does not require multi-camera spawn consensus with one camera', () => {
+    const config = buildConfigFromOptions({ cameras: [{ id: 0 }] });
+
+    expect(config.pipeline.global_reid_tracking.spawn).toMatchObject({
+      require_multi_camera_spawn: false,
+      min_supporting_cameras: 1,
+    });
   });
 
   it('buildConfigFromOptions swaps in calibration_dir/extrinsics_file when a published extrinsics file is passed', () => {
