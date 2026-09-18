@@ -11,6 +11,7 @@ const props = defineProps<{
   fps: number;
   jointsValid: number;
   jointsTotal: number;
+  people: number;
   pose?: PoseFrame | null;
   videoStreams: VideoStreamDescriptor[];
   // What IRIS actually baked into the video already (camera 0's rotation at last run start).
@@ -154,7 +155,7 @@ onBeforeUnmount(() => {
       <section class="pane mocap" data-tour="live-mocap">
         <header class="pane-head">
           <span>Live mocap</span>
-          <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} pose updates/s</span>
+          <span class="meta">{{ people }} {{ people === 1 ? 'person' : 'people' }} · {{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} pose updates/s</span>
         </header>
         <div class="feed mocap-feed">
           <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" />
@@ -166,6 +167,10 @@ onBeforeUnmount(() => {
           <span>Live settings</span>
         </header>
         <div class="settings-body">
+          <div class="stat">
+            <span class="stat-label">People</span>
+            <span class="stat-value">{{ people }}</span>
+          </div>
           <div class="stat">
             <span class="stat-label">Joints</span>
             <span class="stat-value">{{ jointsValid }}/{{ jointsTotal }}</span>

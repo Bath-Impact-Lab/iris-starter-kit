@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { captureSettings, modeFps, type NegotiatedCapture } from '../../shared/capture';
-import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from './types';
+import type { AppPhase, CameraConfig, MocapViewSettings, PoseFrame, TrackingMode, VideoStreamDescriptor } from './types';
 import { countValidKeypoints, extractKeypoints2D } from './utils/pose';
 import { DEFAULT_POSE_MODEL, poseModel, type PoseModelId, type PoseModelAvailability } from '../../shared/poseModels';
 import PoseModelSelect from './components/PoseModelSelect.vue';
+import TrackingModeSelect from './components/TrackingModeSelect.vue';
 import CameraSetupModal from './components/CameraSetupModal.vue';
 import CalibrationModal from './components/CalibrationModal.vue';
 import RigCalibrationModal from './components/RigCalibrationModal.vue';
@@ -30,6 +31,12 @@ function loadPoseModel(): PoseModelId {
 }
 const selectedPoseModel = ref<PoseModelId>(loadPoseModel());
 const activePoseModel = ref<PoseModelId | null>(null);
+function loadTrackingMode(): TrackingMode {
+  try { return localStorage.getItem('tracking-mode') === 'single' ? 'single' : 'multi'; }
+  catch { return 'multi'; }
+}
+const selectedTrackingMode = ref<TrackingMode>(loadTrackingMode());
+const activeTrackingMode = ref<TrackingMode | null>(null);
 const activeRunId = ref<string | null>(null);
 const poseModels = ref<PoseModelAvailability[]>([]);
 const modelBusy = ref(false);
@@ -55,7 +62,10 @@ async function validateSelectedModel() {
   }
 }
 
-async function applyPoseModel() {
+const pipelineSettingsChanged = computed(() => selectedPoseModel.value !== activePoseModel.value ||
+  selectedTrackingMode.value !== activeTrackingMode.value);
+
+async function applyPipelineSettings() {
   if (modelBusy.value) return;
   modelBusy.value = true;
   try {
@@ -71,7 +81,13 @@ async function applyPoseModel() {
     modelError.value = error instanceof Error ? error.message : String(error);
   } finally { modelBusy.value = false; }
 }
-watch(settingsOpen, open => { if (open) { selectedPoseModel.value = activePoseModel.value ?? loadPoseModel(); void refreshPoseModels(); } });
+watch(settingsOpen, open => {
+  if (open) {
+    selectedPoseModel.value = activePoseModel.value ?? loadPoseModel();
+    selectedTrackingMode.value = activeTrackingMode.value ?? loadTrackingMode();
+    void refreshPoseModels();
+  }
+});
 
 const DEFAULT_MOCAP_SETTINGS: MocapViewSettings = {
   scale: 1.3,
@@ -121,7 +137,11 @@ function getIrisApi(): any {
 }
 
 function extractPoseCount(frame: PoseFrame | null | undefined): { valid: number; total: number } {
-  return { valid: countValidKeypoints(extractKeypoints2D(frame)), total: poseModel(frame?.pose_model).keypoints };
+  const people = frame?.people ?? [];
+  return {
+    valid: people.reduce((total, person) => total + countValidKeypoints(extractKeypoints2D(frame, 0, undefined, person)), 0),
+    total: people.length * poseModel(frame?.pose_model).keypoints,
+  };
 }
 
 // Rolling count of pose frames received in the last second -- an honest
@@ -183,6 +203,7 @@ async function startIrisRun(config: CameraConfig[]) {
   livePose.value = null;
   activeRunId.value = null;
   activePoseModel.value = null;
+  activeTrackingMode.value = null;
   liveFps.value = 0;
   frameArrivalTimes.length = 0;
   liveJoints.value = { valid: 0, total: poseModel(selectedPoseModel.value).keypoints };
@@ -190,6 +211,7 @@ async function startIrisRun(config: CameraConfig[]) {
   bakedRotation.value = config[0]?.rotation ?? 0;
   captureError.value = '';
   const requestedModel = selectedPoseModel.value;
+  const requestedTrackingMode = selectedTrackingMode.value;
 
   try {
     // Resolution/fps are rig-wide (matches rotation); captureSettings rejects a rig that disagrees.
@@ -197,6 +219,7 @@ async function startIrisRun(config: CameraConfig[]) {
     const payload = {
       run_id: `starter-${Date.now()}`,
       pose_model: requestedModel,
+      tracking_mode: requestedTrackingMode,
       camera_width: settings.width,
       camera_height: settings.height,
       video_fps: settings.fps,
@@ -218,8 +241,12 @@ async function startIrisRun(config: CameraConfig[]) {
     }
     else {
       activePoseModel.value = requestedModel;
+      activeTrackingMode.value = requestedTrackingMode;
       activeRunId.value = runResult.runId;
-      try { localStorage.setItem('pose-model', requestedModel); } catch { /* Storage is optional. */ }
+      try {
+        localStorage.setItem('pose-model', requestedModel);
+        localStorage.setItem('tracking-mode', requestedTrackingMode);
+      } catch { /* Storage is optional. */ }
     }
   } catch (error) {
     console.warn('[starter-kit] startRun failed:', error);
@@ -318,7 +345,7 @@ async function onCameraSetupContinue(config: CameraConfig[]) {
       return;
     }
 
-    const needsRecalibration = changes!.devicesChanged || changes!.captureChanged || selectedPoseModel.value !== activePoseModel.value;
+    const needsRecalibration = changes!.devicesChanged || changes!.captureChanged || pipelineSettingsChanged.value;
     if (!needsRecalibration) return;
 
     // Running IRIS process was started with the old config; replace it rather than fight over the devices.
@@ -367,6 +394,7 @@ function onRigCalibrationClose() {
 function reopenSetup() {
   settingsOpen.value = false;
   selectedPoseModel.value = activePoseModel.value ?? loadPoseModel();
+  selectedTrackingMode.value = activeTrackingMode.value ?? loadTrackingMode();
   void refreshPoseModels();
   cameraSetupOpen.value = true;
 }
@@ -417,6 +445,7 @@ function replayTour() {
         :fps="liveFps"
         :joints-valid="liveJoints.valid"
         :joints-total="liveJoints.total"
+        :people="livePose?.people?.length ?? 0"
         :pose="livePose"
         :video-streams="videoStreams"
         :baked-rotation="bakedRotation"
@@ -446,7 +475,7 @@ function replayTour() {
     <CameraSetupModal
       :open="cameraSetupOpen"
       :continue-disabled="modelBusy || !modelAvailable"
-      :continue-label="phase !== 'camera-setup' && selectedPoseModel !== activePoseModel ? 'Apply and restart capture' : undefined"
+      :continue-label="phase !== 'camera-setup' && pipelineSettingsChanged ? 'Apply and restart capture' : undefined"
       :editing="phase !== 'camera-setup'"
       :video-streams="videoStreams"
       :current-config="cameras"
@@ -455,7 +484,8 @@ function replayTour() {
       @close="onCameraSetupClose"
     >
       <PoseModelSelect v-model="selectedPoseModel" :models="poseModels" :disabled="modelBusy" />
-      <p v-if="phase !== 'camera-setup' && selectedPoseModel !== activePoseModel" class="capture-status">Changing the model restarts capture.</p>
+      <TrackingModeSelect v-model="selectedTrackingMode" :disabled="modelBusy" />
+      <p v-if="phase !== 'camera-setup' && pipelineSettingsChanged" class="capture-status">Changing pipeline settings restarts capture.</p>
       <p v-if="modelError" role="alert">{{ modelError }}</p>
     </CameraSetupModal>
     <CalibrationModal
@@ -471,9 +501,10 @@ function replayTour() {
       <div class="settings-panel">
         <h3>Settings</h3>
         <PoseModelSelect v-model="selectedPoseModel" :models="poseModels" :disabled="modelBusy" />
+        <TrackingModeSelect v-model="selectedTrackingMode" :disabled="modelBusy" />
         <small v-if="activePoseModel">Running: {{ poseModel(activePoseModel).description }}</small>
-        <button v-if="phase !== 'camera-setup' && selectedPoseModel !== activePoseModel" type="button" class="btn"
-          :disabled="modelBusy || !modelAvailable" @click="applyPoseModel">{{ modelBusy ? 'Applying?' : 'Apply and restart capture' }}</button>
+        <button v-if="phase !== 'camera-setup' && pipelineSettingsChanged" type="button" class="btn"
+          :disabled="modelBusy || !modelAvailable" @click="applyPipelineSettings">{{ modelBusy ? 'Applying?' : 'Apply and restart capture' }}</button>
         <p v-if="modelError" role="alert">{{ modelError }}</p>
         <button type="button" class="btn" @click="reopenSetup">Camera setup</button>
         <button type="button" class="btn" @click="reopenCalibration">Re-calibrate</button>

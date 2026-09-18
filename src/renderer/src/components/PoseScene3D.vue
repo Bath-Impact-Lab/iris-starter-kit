@@ -2,29 +2,31 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { MocapViewSettings, PoseFrame } from '../types';
+import type { MocapViewSettings, PoseFrame, PosePerson } from '../types';
 import { skeletonForFrame, extractJointCenters3D, type JointCenter3D } from '../utils/pose';
 
-const props = defineProps<{
-  pose?: PoseFrame | null;
-  settings: MocapViewSettings;
-}>();
-
+const props = defineProps<{ pose?: PoseFrame | null; settings: MocapViewSettings }>();
 const containerRef = ref<HTMLElement | null>(null);
-
-
-
 const JOINT_RADIUS = 0.035;
-// Per-frame joint data can be noisy/intermittent (occlusion, low confidence). Smooth
-// positions toward each new reading instead of snapping, and give a joint a short grace
-// period of missed frames before hiding it, instead of vanishing on the very first miss.
 const SMOOTHING_ALPHA = 0.35;
 const MISS_FRAMES_BEFORE_HIDE = 5;
+const PERSON_FRAMES_BEFORE_REMOVE = 15;
+const PERSON_COLOURS = [0x6b9fff, 0xff8a65, 0x62d49b, 0xc792ea, 0xffcb6b, 0x89ddff];
 
 interface JointState {
   smoothed: THREE.Vector3;
   missCount: number;
   everValid: boolean;
+}
+
+interface PersonVisual {
+  group: THREE.Group;
+  joints: Map<string, THREE.Mesh>;
+  bones: Map<string, THREE.Mesh>;
+  jointState: Map<string, JointState>;
+  jointMaterial: THREE.MeshStandardMaterial;
+  boneMaterial: THREE.MeshStandardMaterial;
+  missedFrames: number;
 }
 
 let renderer: THREE.WebGLRenderer | null = null;
@@ -33,27 +35,83 @@ let camera: THREE.PerspectiveCamera | null = null;
 let controls: OrbitControls | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let animationFrameId: number | null = null;
+let skeleton = skeletonForFrame(null);
+let poseChanged = false;
 
 const jointGeometry = new THREE.SphereGeometry(JOINT_RADIUS, 16, 12);
-const jointMaterial = new THREE.MeshStandardMaterial({ color: 0x6b9fff, emissive: 0x0d1c3a, roughness: 0.4 });
-const boneMaterial = new THREE.MeshStandardMaterial({ color: 0x4a72c4, roughness: 0.5 });
-
-const joints = new Map<string, THREE.Mesh>();
-const bones = new Map<string, THREE.Mesh>();
-const jointState = new Map<string, JointState>();
+// Unit geometry is shared by every bone. Length/thickness are mesh scales,
+// avoiding a GPU geometry allocation and disposal on every frame.
+const boneGeometry = new THREE.CylinderGeometry(1, 1, 1, 8, 1, false);
+const people = new Map<string, PersonVisual>();
+const unitY = new THREE.Vector3(0, 1, 0);
+const direction = new THREE.Vector3();
 
 function isValid(center: JointCenter3D | undefined): center is JointCenter3D {
   return !!center && [center.x, center.y, center.z].every(Number.isFinite) &&
     (center.x !== 0 || center.y !== 0 || center.z !== 0);
 }
 
+function personKey(person: PosePerson, index: number): string {
+  return Number.isFinite(person.person_id) ? `id:${person.person_id}` : `anonymous:${index}`;
+}
+
+function colourFor(key: string): number {
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  return PERSON_COLOURS[Math.abs(hash) % PERSON_COLOURS.length]!;
+}
+
+function createPersonVisual(key: string): PersonVisual {
+  const group = new THREE.Group();
+  group.userData.personKey = key;
+  const colour = colourFor(key);
+  const jointMaterial = new THREE.MeshStandardMaterial({
+    color: colour, emissive: colour, emissiveIntensity: 0.08, roughness: 0.4,
+  });
+  const boneMaterial = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.5 });
+  const visual: PersonVisual = {
+    group, joints: new Map(), bones: new Map(), jointState: new Map(),
+    jointMaterial, boneMaterial, missedFrames: 0,
+  };
+
+  for (const name of skeleton.names) {
+    const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
+    mesh.visible = false;
+    if (name.startsWith('face_') || name.includes('_hand_')) mesh.scale.setScalar(0.25);
+    visual.joints.set(name, mesh);
+    visual.jointState.set(name, { smoothed: new THREE.Vector3(), missCount: 0, everValid: false });
+    group.add(mesh);
+  }
+  for (const [from, to] of skeleton.bones) {
+    const mesh = new THREE.Mesh(boneGeometry, boneMaterial);
+    mesh.visible = false;
+    mesh.userData.detail = from.startsWith('face_') || from.includes('_hand_');
+    visual.bones.set(`${from}-${to}`, mesh);
+    group.add(mesh);
+  }
+  scene?.add(group);
+  people.set(key, visual);
+  return visual;
+}
+
+function removePersonVisual(key: string): void {
+  const visual = people.get(key);
+  if (!visual) return;
+  scene?.remove(visual.group);
+  visual.jointMaterial.dispose();
+  visual.boneMaterial.dispose();
+  people.delete(key);
+}
+
+function clearPeople(): void {
+  for (const key of [...people.keys()]) removePersonVisual(key);
+}
+
 function buildScene(container: HTMLElement): void {
   scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0x0a0c10, 3, 10);
-
   camera = new THREE.PerspectiveCamera(45, 1, 0.05, 50);
   camera.position.set(1.6, 1.4, 2.4);
-
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   container.appendChild(renderer.domElement);
@@ -69,11 +127,7 @@ function buildScene(container: HTMLElement): void {
   const key = new THREE.DirectionalLight(0xffffff, 1.2);
   key.position.set(2, 3, 2);
   scene.add(key);
-
-  const grid = new THREE.GridHelper(10, 20, 0x35507a, 0x1c2431);
-  scene.add(grid);
-
-  rebuildSkeleton();
+  scene.add(new THREE.GridHelper(10, 20, 0x35507a, 0x1c2431));
 
   resizeScene(container.clientWidth, container.clientHeight);
   resizeObserver = new ResizeObserver((entries) => {
@@ -84,41 +138,11 @@ function buildScene(container: HTMLElement): void {
   const animate = (): void => {
     animationFrameId = requestAnimationFrame(animate);
     controls?.update();
-    if (poseChanged) {
-      poseChanged = false;
-      updateScene();
-    }
+    if (poseChanged) { poseChanged = false; updateScene(); }
     if (renderer && scene && camera) renderer.render(scene, camera);
   };
+  poseChanged = true;
   animationFrameId = requestAnimationFrame(animate);
-}
-
-let skeleton = skeletonForFrame(null);
-function rebuildSkeleton(): void {
-  if (!scene) return;
-  for (const mesh of joints.values()) scene.remove(mesh);
-  for (const mesh of bones.values()) { scene.remove(mesh); mesh.geometry.dispose(); }
-  joints.clear();
-  bones.clear();
-  jointState.clear();
-  skeleton = skeletonForFrame(props.pose);
-  for (const name of skeleton.names) {
-    const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
-    mesh.visible = false;
-    if (name.startsWith('face_') || name.includes('_hand_')) mesh.scale.setScalar(0.25);
-    joints.set(name, mesh);
-    jointState.set(name, { smoothed: new THREE.Vector3(), missCount: 0, everValid: false });
-    scene.add(mesh);
-  }
-  for (const [from, to] of skeleton.bones) {
-    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(props.settings.boneThickness, 0.1, 4, 8), boneMaterial);
-    mesh.visible = false;
-    mesh.userData.detail = from.startsWith('face_') || from.includes('_hand_');
-    bones.set(`${from}-${to}`, mesh);
-    scene.add(mesh);
-  }
-
-  updateScene();
 }
 
 function resizeScene(width: number, height: number): void {
@@ -135,28 +159,22 @@ function scaledPosition(center: JointCenter3D): THREE.Vector3 {
 
 function updateBone(start: THREE.Vector3, end: THREE.Vector3, mesh: THREE.Mesh): void {
   const length = start.distanceTo(end);
-  if (length < 0.005) {
-    mesh.visible = false;
-    return;
-  }
-
-  mesh.geometry.dispose();
+  if (length < 0.005) { mesh.visible = false; return; }
   const detail = mesh.userData.detail ? 0.25 : 1;
-  mesh.geometry = new THREE.CapsuleGeometry(props.settings.boneThickness * detail, length, 4, 8);
+  const radius = props.settings.boneThickness * detail;
   mesh.visible = true;
   mesh.position.copy(start).add(end).multiplyScalar(0.5);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.clone().sub(start).normalize());
+  direction.copy(end).sub(start).normalize();
+  mesh.quaternion.setFromUnitVectors(unitY, direction);
+  mesh.scale.set(radius, length, radius);
 }
 
-function updateScene(): void {
-  if (skeleton !== skeletonForFrame(props.pose)) { rebuildSkeleton(); return; }
-  const centers = extractJointCenters3D(props.pose);
-  const byName = new Map(centers.map((center) => [center.name, center]));
-
-  for (const [name, mesh] of joints) {
-    const state = jointState.get(name)!;
+function updatePerson(frame: PoseFrame, person: PosePerson, visual: PersonVisual): void {
+  visual.missedFrames = 0;
+  const byName = new Map(extractJointCenters3D(frame, person).map((center) => [center.name, center]));
+  for (const [name, mesh] of visual.joints) {
+    const state = visual.jointState.get(name)!;
     const center = byName.get(name);
-
     if (isValid(center)) {
       const raw = scaledPosition(center);
       if (state.everValid) state.smoothed.lerp(raw, SMOOTHING_ALPHA);
@@ -166,7 +184,6 @@ function updateScene(): void {
       mesh.visible = true;
       mesh.position.copy(state.smoothed);
     } else if (state.everValid && state.missCount < MISS_FRAMES_BEFORE_HIDE) {
-      // Brief dropout -- hold the last known position instead of vanishing immediately.
       state.missCount += 1;
     } else {
       mesh.visible = false;
@@ -174,40 +191,46 @@ function updateScene(): void {
   }
 
   for (const [from, to] of skeleton.bones) {
-    const mesh = bones.get(`${from}-${to}`);
-    const fromMesh = joints.get(from);
-    const toMesh = joints.get(to);
+    const mesh = visual.bones.get(`${from}-${to}`);
+    const fromMesh = visual.joints.get(from);
+    const toMesh = visual.joints.get(to);
     if (!mesh || !fromMesh || !toMesh) continue;
-
     if (fromMesh.visible && toMesh.visible) {
-      updateBone(jointState.get(from)!.smoothed, jointState.get(to)!.smoothed, mesh);
+      updateBone(visual.jointState.get(from)!.smoothed, visual.jointState.get(to)!.smoothed, mesh);
     } else {
       mesh.visible = false;
     }
   }
 }
 
-// Pose frames can arrive faster than the display refreshes, and updateScene
-// is not cheap. Apply only the newest pose, right before the next render,
-// so no work is spent on poses that are never drawn.
-let poseChanged = false;
+function updateScene(): void {
+  const nextSkeleton = skeletonForFrame(props.pose);
+  if (skeleton !== nextSkeleton) { skeleton = nextSkeleton; clearPeople(); }
+
+  const frame = props.pose;
+  const activeKeys = new Set<string>();
+  for (const [index, person] of (frame?.people ?? []).entries()) {
+    const key = personKey(person, index);
+    activeKeys.add(key);
+    updatePerson(frame!, person, people.get(key) ?? createPersonVisual(key));
+  }
+  for (const [key, visual] of people) {
+    if (activeKeys.has(key)) continue;
+    visual.missedFrames += 1;
+    if (visual.missedFrames > PERSON_FRAMES_BEFORE_REMOVE) removePersonVisual(key);
+  }
+}
+
 watch(() => props.pose, () => { poseChanged = true; });
-
-// scale/boneThickness are picked up on the next updateScene() call, which this triggers immediately.
-watch(() => props.settings, updateScene, { deep: true });
-
-onMounted(() => {
-  if (containerRef.value) buildScene(containerRef.value);
-});
-
+watch(() => props.settings, () => { poseChanged = true; }, { deep: true });
+onMounted(() => { if (containerRef.value) buildScene(containerRef.value); });
 onBeforeUnmount(() => {
   if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
   resizeObserver?.disconnect();
   controls?.dispose();
-  for (const mesh of bones.values()) mesh.geometry.dispose();
+  clearPeople();
   jointGeometry.dispose();
-  jointMaterial.dispose();
-  boneMaterial.dispose();
+  boneGeometry.dispose();
   renderer?.dispose();
   renderer?.domElement.remove();
 });
@@ -218,14 +241,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.scene3d {
-  width: 100%;
-  height: 100%;
-}
-
-.scene3d :deep(canvas) {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
+.scene3d { width: 100%; height: 100%; }
+.scene3d :deep(canvas) { display: block; width: 100%; height: 100%; }
 </style>
