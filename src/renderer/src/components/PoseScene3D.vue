@@ -3,11 +3,13 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { MocapViewSettings, PoseFrame } from '../types';
+import type { Da3Scene } from '../../../shared/roi';
 import { skeletonForFrame, extractJointCenters3D, type JointCenter3D } from '../utils/pose';
 
 const props = defineProps<{
   pose?: PoseFrame | null;
   settings: MocapViewSettings;
+  pointCloud: Da3Scene | null;
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -33,6 +35,7 @@ let camera: THREE.PerspectiveCamera | null = null;
 let controls: OrbitControls | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let animationFrameId: number | null = null;
+let cloud: THREE.Points | null = null;
 
 const jointGeometry = new THREE.SphereGeometry(JOINT_RADIUS, 16, 12);
 const jointMaterial = new THREE.MeshStandardMaterial({ color: 0x6b9fff, emissive: 0x0d1c3a, roughness: 0.4 });
@@ -45,6 +48,33 @@ const jointState = new Map<string, JointState>();
 function isValid(center: JointCenter3D | undefined): center is JointCenter3D {
   return !!center && [center.x, center.y, center.z].every(Number.isFinite) &&
     (center.x !== 0 || center.y !== 0 || center.z !== 0);
+}
+
+function rebuildCloud(): void {
+  if (!scene) return;
+  if (cloud) {
+    scene.remove(cloud);
+    cloud.geometry.dispose();
+    (cloud.material as THREE.Material).dispose();
+    cloud = null;
+  }
+  const data = props.pointCloud;
+  if (!data) return;
+  const colors = new Float32Array(data.colors.length);
+  const color = new THREE.Color();
+  for (let i = 0; i < data.colors.length; i += 3) {
+    color.setRGB(data.colors[i] / 255, data.colors[i + 1] / 255, data.colors[i + 2] / 255, THREE.SRGBColorSpace);
+    colors[i] = color.r;
+    colors[i + 1] = color.g;
+    colors[i + 2] = color.b;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  cloud = new THREE.Points(geometry, new THREE.PointsMaterial({
+    size: 2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false,
+  }));
+  scene.add(cloud);
 }
 
 function buildScene(container: HTMLElement): void {
@@ -72,6 +102,8 @@ function buildScene(container: HTMLElement): void {
 
   const grid = new THREE.GridHelper(10, 20, 0x35507a, 0x1c2431);
   scene.add(grid);
+
+  rebuildCloud();
 
   rebuildSkeleton();
 
@@ -129,7 +161,7 @@ function resizeScene(width: number, height: number): void {
 }
 
 function scaledPosition(center: JointCenter3D): THREE.Vector3 {
-  const scale = props.settings.scale;
+  const scale = props.pointCloud ? 1 : props.settings.scale;
   return new THREE.Vector3(center.x * scale, center.y * scale, center.z * scale);
 }
 
@@ -195,6 +227,11 @@ watch(() => props.pose, () => { poseChanged = true; });
 
 // scale/boneThickness are picked up on the next updateScene() call, which this triggers immediately.
 watch(() => props.settings, updateScene, { deep: true });
+watch(() => props.pointCloud, () => {
+  rebuildCloud();
+  for (const state of jointState.values()) state.everValid = false;
+  updateScene();
+});
 
 onMounted(() => {
   if (containerRef.value) buildScene(containerRef.value);
@@ -205,6 +242,7 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   controls?.dispose();
   for (const mesh of bones.values()) mesh.geometry.dispose();
+  if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); }
   jointGeometry.dispose();
   jointMaterial.dispose();
   boneMaterial.dispose();

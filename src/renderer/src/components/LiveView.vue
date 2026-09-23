@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type { CameraConfig, MocapViewSettings, PoseFrame, VideoStreamDescriptor } from '../types';
 import { H264AnnexBDecoder } from '../utils/h264-annexb-decoder';
 import PoseScene3D from './PoseScene3D.vue';
 import CaptureAreaWorkspace from './CaptureAreaWorkspace.vue';
-import type { RoiState, SavedRoi } from '../../../shared/roi';
+import type { Da3Scene, RoiState, SavedRoi } from '../../../shared/roi';
 
 const props = defineProps<{
   cameras: CameraConfig[];
@@ -41,6 +41,36 @@ const roiOpen = ref(false);
 const roiState = ref<RoiState | null>(null);
 const savedRoi = ref<SavedRoi | null>(null);
 const roiError = ref('');
+const showDa3 = ref(false);
+const da3Scene = shallowRef<Da3Scene | null>(null);
+const da3Loading = ref(false);
+const da3Error = ref('');
+const da3Key = computed(() => roiState.value?.runId && roiState.value.calibrationVersion > 0
+  ? `${roiState.value.runId}:${roiState.value.calibrationVersion}` : null);
+let da3Sequence = 0;
+async function loadDa3() {
+  const state = roiState.value;
+  const sequence = ++da3Sequence;
+  da3Scene.value = null;
+  da3Error.value = '';
+  da3Loading.value = false;
+  if (!showDa3.value || !state?.runId || !state.calibrationVersion) return;
+  da3Loading.value = true;
+  try {
+    const result = await window.irisStarter.roiScene({ runId: state.runId, calibrationVersion: state.calibrationVersion });
+    if (disposed || sequence !== da3Sequence) return;
+    if (result.ok && result.scene?.runId === state.runId && result.scene.calibrationVersion === state.calibrationVersion) {
+      da3Scene.value = result.scene;
+    } else {
+      da3Error.value = result.error ?? 'DA3 reconstruction is unavailable.';
+    }
+  } catch (error) {
+    if (!disposed && sequence === da3Sequence) da3Error.value = String(error);
+  } finally {
+    if (sequence === da3Sequence) da3Loading.value = false;
+  }
+}
+watch([showDa3, da3Key], () => { void loadDa3(); });
 let pollingRoi = false;
 let disposed = false;
 let roiTimer: ReturnType<typeof setInterval>;
@@ -142,6 +172,7 @@ watch(
 
 onBeforeUnmount(() => {
   disposed = true;
+  da3Sequence++;
   clearInterval(roiTimer);
   for (const cameraId of [...decoders.keys()]) detachDecoder(cameraId);
 });
@@ -157,7 +188,7 @@ onBeforeUnmount(() => {
           <span class="meta">{{ jointsValid }}/{{ jointsTotal }} joints · {{ fps }} pose updates/s</span>
         </header>
         <div class="feed mocap-feed">
-          <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" />
+          <PoseScene3D v-if="!roiOpen" :pose="pose" :settings="mocapSettings" :point-cloud="showDa3 ? da3Scene : null" />
         </div>
       </section>
 
@@ -180,11 +211,18 @@ onBeforeUnmount(() => {
           </div>
 
           <h4 class="settings-subhead">Mocap view</h4>
+          <label class="scene-toggle"><input type="checkbox" v-model="showDa3" /> Show DA3 reconstruction</label>
+          <span v-if="showDa3 && !da3Key" class="meta" role="status">Waiting for calibration to provide a scene.</span>
+          <span v-else-if="showDa3 && (da3Loading || da3Error)" class="meta" role="status">
+            {{ da3Loading ? 'Loading DA3 reconstruction…' : da3Error }}
+            <button v-if="da3Error" type="button" class="retry-button" @click="loadDa3">Retry</button>
+          </span>
+          <span v-else-if="showDa3 && da3Scene" class="meta">Scene shown in calibrated world coordinates.</span>
           <button class="roi-button" @click="roiOpen = true; refreshRoi()">Capture area</button>
           <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
           <label class="field">
-            <span>Skeleton length ({{ mocapSettings.scale.toFixed(1) }}x)</span>
-            <input type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
+            <span>Skeleton length ({{ da3Scene && showDa3 ? '1.0x with DA3' : `${mocapSettings.scale.toFixed(1)}x` }})</span>
+            <input v-if="!showDa3 || !da3Scene" type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
           </label>
           <label class="field">
             <span>Bone thickness ({{ mocapSettings.boneThickness.toFixed(3) }})</span>
@@ -288,6 +326,8 @@ onBeforeUnmount(() => {
 .field input[type='range'] {
   width: 100%;
 }
+.scene-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #e8eaed; }
+.retry-button { margin-left: 6px; padding: 3px 7px; color: #eef4ff; background: #263650; border: 1px solid #526784; border-radius: 4px; }
 
 .camera-grid {
   flex: 2;
