@@ -1,4 +1,4 @@
-![IRIS Starter Kit](docs/banner.jpg)
+![IRIS Starter Kit](docs/banner.png)
 
 
 Open-source, lightweight starter kit for [IRIS](https://iris.cs.bath.ac.uk/) markerless motion capture apps.
