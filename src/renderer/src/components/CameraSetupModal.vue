@@ -47,6 +47,10 @@ const previewModes = ref<Record<string, PreviewMode | null>>({});
 const previewErrors = ref<Set<string>>(new Set());
 const previewGeneration = new Map<string, number>();
 const loading = ref(false);
+let discoveryGeneration = 0;
+let discoveryBusyGeneration: number | null = null;
+let discoveryLoaded = false;
+let discoveryTimer: ReturnType<typeof setInterval> | null = null;
 const rigResolution = ref<Resolution>('1920x1080'), rigFps = ref(30);
 const selectedProfiles = computed(() => deviceProfiles.value.filter(device => selectedIds.value.has(device.id)));
 const selectedCameras = computed(() => cameras.value.filter(cam => selectedIds.value.has(cam.deviceId)));
@@ -177,14 +181,17 @@ function readPersistedSelection(deviceId: string): boolean {
   }
 }
 
-async function loadCameras() {
-  loading.value = true;
+async function loadCameras(preserveExisting = false, generation = discoveryGeneration) {
+  if (!preserveExisting) loading.value = true;
+  const existingByDeviceId = new Map((preserveExisting ? cameras.value : []).map(cam => [cam.deviceId, cam]));
+  const previousSelectedIds = new Set(selectedIds.value);
   try {
-    await ensurePermission();
+    if (!preserveExisting) await ensurePermission();
     const [devices, native] = await Promise.all([
       listVideoInputs().catch(() => []),
       window.irisStarter?.listCaptureCameras?.().catch(() => null) ?? Promise.resolve(null),
     ]);
+    if (generation !== discoveryGeneration || !props.open) return;
     const knownByDeviceId = new Map((props.editing ? props.currentConfig : undefined)?.map((c) => [c.deviceId, c]) ?? []);
     if (native !== null && native !== undefined) {
       deviceProfiles.value = nativeCameraProfiles(native, devices);
@@ -193,20 +200,31 @@ async function loadCameras() {
         try { persisted = JSON.parse(localStorage.getItem(`camera-config:${device.id}`) ?? '{}') ?? {}; } catch { /* Ignore corrupt preferences. */ }
         return { ...defaultConfig(device, index), label: persisted.displayName ?? device.label,
           rotation: persisted.rotation ?? device.defaultRotation ?? 0,
-          ...knownByDeviceId.get(device.id), nativeIndex: device.nativeIndex, browserDeviceId: device.browserDeviceId };
+          ...knownByDeviceId.get(device.id), ...existingByDeviceId.get(device.id),
+          nativeIndex: device.nativeIndex,
+          browserDeviceId: device.browserDeviceId ?? existingByDeviceId.get(device.id)?.browserDeviceId
+            ?? knownByDeviceId.get(device.id)?.browserDeviceId };
       });
-      selectedIds.value = new Set(cameras.value.filter(cam => knownByDeviceId.has(cam.deviceId) || readPersistedSelection(cam.deviceId)).map(cam => cam.deviceId));
-      const common = selectCommonConfig(selectedProfiles.value);
-      let remembered: { resolution?: Resolution; fps?: number } = {};
-      try { remembered = JSON.parse(localStorage.getItem('capture-rig-settings') ?? '{}') ?? {}; } catch { /* Ignore corrupt preferences. */ }
-      rigResolution.value = props.currentConfig?.[0]?.resolution ?? remembered.resolution ?? common.resolution;
-      rigFps.value = props.currentConfig?.[0]?.fps ?? remembered.fps ?? common.fps;
+      selectedIds.value = new Set(cameras.value.filter(cam => existingByDeviceId.has(cam.deviceId)
+        ? previousSelectedIds.has(cam.deviceId) : knownByDeviceId.has(cam.deviceId) || readPersistedSelection(cam.deviceId)).map(cam => cam.deviceId));
+      if (!preserveExisting) {
+        const common = selectCommonConfig(selectedProfiles.value);
+        let remembered: { resolution?: Resolution; fps?: number } = {};
+        try { remembered = JSON.parse(localStorage.getItem('capture-rig-settings') ?? '{}') ?? {}; } catch { /* Ignore corrupt preferences. */ }
+        rigResolution.value = props.currentConfig?.[0]?.resolution ?? remembered.resolution ?? common.resolution;
+        rigFps.value = props.currentConfig?.[0]?.fps ?? remembered.fps ?? common.fps;
+      }
       return;
     }
+    // Keep stable native device IDs if one IRIS query fails during a refresh.
+    if (preserveExisting && deviceProfiles.value.some(profile => profile.nativeIndex !== undefined)) return;
 
     // Probing a device IRIS already holds fails and overwrites its real resolution/fps with fallback defaults.
     const toProbe = devices.filter((d) => !knownByDeviceId.has(d.deviceId));
-    const probed = await Promise.all(toProbe.map((d) => probeCamera(d.deviceId)));
+    const probed = await Promise.all(toProbe.map((d) => existingByDeviceId.has(d.deviceId)
+      ? Promise.resolve(deviceProfiles.value.find(profile => profile.id === d.deviceId) ?? { id: d.deviceId, label: d.label })
+      : probeCamera(d.deviceId)));
+    if (generation !== discoveryGeneration || !props.open) return;
     const probedById = new Map(probed.map((p) => [p.id, p]));
 
     deviceProfiles.value = devices.map((d) => {
@@ -220,11 +238,15 @@ async function loadCameras() {
     const common = selectCommonConfig(deviceProfiles.value);
     const preferredResolution = common.resolution ?? '1920x1080';
     const preferredFps = common.fps ?? 30;
-    rigResolution.value = props.currentConfig?.[0]?.resolution ?? preferredResolution;
-    rigFps.value = props.currentConfig?.[0]?.fps ?? preferredFps;
+    if (!preserveExisting) {
+      rigResolution.value = props.currentConfig?.[0]?.resolution ?? preferredResolution;
+      rigFps.value = props.currentConfig?.[0]?.fps ?? preferredFps;
+    }
 
     cameras.value = devices.map((d, index) => {
       const known = knownByDeviceId.get(d.deviceId);
+      const existing = existingByDeviceId.get(d.deviceId);
+      if (existing) return existing;
       if (known) return { ...known };
 
       const dev = probedById.get(d.deviceId) ?? ({ id: d.deviceId, label: d.label, defaultRotation: 0 } as CameraDevice);
@@ -251,13 +273,17 @@ async function loadCameras() {
     // else falls back to its persisted choice, defaulting to selected for new devices.
     selectedIds.value = new Set(
       cameras.value
-        .filter((cam) => knownByDeviceId.has(cam.deviceId) || readPersistedSelection(cam.deviceId))
+        .filter((cam) => existingByDeviceId.has(cam.deviceId)
+          ? previousSelectedIds.has(cam.deviceId) : knownByDeviceId.has(cam.deviceId) || readPersistedSelection(cam.deviceId))
         .map((cam) => cam.deviceId),
     );
   } catch (err) {
+    if (generation !== discoveryGeneration || !props.open) return;
+    if (preserveExisting) return;
     // fallback to existing bridge if present
     if ((window as any).irisStarter && (window as any).irisStarter.listCameras) {
       const devices = await (window as any).irisStarter.listCameras();
+      if (generation !== discoveryGeneration || !props.open) return;
       deviceProfiles.value = devices as CameraDevice[];
       cameras.value = devices.map((device: CameraDevice, index: number) => defaultConfig(device, index));
       selectedIds.value = new Set(
@@ -269,20 +295,24 @@ async function loadCameras() {
       selectedIds.value = new Set();
     }
   } finally {
-    loading.value = false;
-    if (!selectableResolutions.value.includes(rigResolution.value) && selectableResolutions.value.length)
-      rigResolution.value = selectCommonConfig(selectedProfiles.value).resolution;
-    if (!selectableFps.value.some(fps => sameFps(fps, rigFps.value)))
-      rigFps.value = selectCommonConfig(selectedProfiles.value).fps;
+    if (generation === discoveryGeneration && props.open) {
+      if (!preserveExisting) loading.value = false;
+      if (!selectableResolutions.value.includes(rigResolution.value) && selectableResolutions.value.length)
+        rigResolution.value = selectCommonConfig(selectedProfiles.value).resolution;
+      if (!selectableFps.value.some(fps => sameFps(fps, rigFps.value)))
+        rigFps.value = selectCommonConfig(selectedProfiles.value).fps;
+    }
   }
 }
 
-async function postLoadSetup() {
+async function postLoadSetup(generation: number) {
+  if (generation !== discoveryGeneration || !props.open) return;
   const all = new Set<string>();
   cameras.value.forEach((c) => all.add(c.deviceId));
   expandedIds.value = all;
   showAllPreviews.value = true;
   await nextTick();
+  if (generation !== discoveryGeneration || !props.open) return;
   await Promise.all(
     cameras.value.map((c) => (hasIrisStream(c.deviceId) ? Promise.resolve() : startPreview(c.deviceId))),
   );
@@ -461,29 +491,71 @@ async function toggleAllPreviews() {
   }
 }
 
-watch(
-  () => props.open,
-  (isOpen) => {
-    if (isOpen) {
-      // Re-probe on every open, not just the first, to pick up plugged/unplugged cameras.
-      void loadCameras().then(() => postLoadSetup());
-    } else {
-      expandedIds.value.clear();
-      showAllPreviews.value = false;
-      stopAllPreviews();
-      detachAllIrisDecoders();
+async function refreshCameras() {
+  if (!props.open || discoveryBusyGeneration === discoveryGeneration) return;
+  const generation = discoveryGeneration;
+  discoveryBusyGeneration = generation;
+  const previous = new Map(cameras.value.map(cam => [cam.deviceId, cam.browserDeviceId]));
+  try {
+    await loadCameras(discoveryLoaded, generation);
+    if (generation !== discoveryGeneration || !props.open) return;
+    if (!discoveryLoaded) {
+      discoveryLoaded = true;
+      await postLoadSetup(generation);
+      return;
     }
-  },
-);
+    const currentIds = new Set(cameras.value.map(cam => cam.deviceId));
+    for (const deviceId of previous.keys()) {
+      if (currentIds.has(deviceId)) continue;
+      stopPreview(deviceId);
+      detachIrisDecoder(deviceId);
+    }
+    expandedIds.value = new Set([...expandedIds.value].filter(id => currentIds.has(id)));
+    const toPreview = cameras.value.filter(cam => {
+      if (!previous.has(cam.deviceId) && showAllPreviews.value) {
+        expandedIds.value.add(cam.deviceId);
+        return true;
+      }
+      return previous.has(cam.deviceId) && previous.get(cam.deviceId) !== cam.browserDeviceId && expandedIds.value.has(cam.deviceId);
+    });
+    for (const cam of toPreview) stopPreview(cam.deviceId);
+    await nextTick();
+    if (generation !== discoveryGeneration || !props.open) return;
+    await Promise.all(toPreview.map(cam => hasIrisStream(cam.deviceId) ? Promise.resolve() : startPreview(cam.deviceId)));
+  } catch (error) {
+    console.warn('[camera-setup] camera discovery failed:', error);
+  } finally {
+    if (discoveryBusyGeneration === generation) discoveryBusyGeneration = null;
+  }
+}
 
-onMounted(() => {
-  void loadCameras().then(() => postLoadSetup());
-});
+function startCameraDiscovery() {
+  discoveryGeneration++;
+  discoveryLoaded = false;
+  navigator.mediaDevices?.addEventListener?.('devicechange', refreshCameras);
+  // Native IRIS enumeration can change without Chromium firing devicechange.
+  discoveryTimer = setInterval(() => { void refreshCameras(); }, 4000);
+  void refreshCameras();
+}
 
-onUnmounted(() => {
+function stopCameraDiscovery() {
+  discoveryGeneration++;
+  if (discoveryTimer !== null) clearInterval(discoveryTimer);
+  discoveryTimer = null;
+  navigator.mediaDevices?.removeEventListener?.('devicechange', refreshCameras);
+  expandedIds.value.clear();
+  showAllPreviews.value = false;
   stopAllPreviews();
   detachAllIrisDecoders();
+}
+
+watch(() => props.open, isOpen => {
+  if (isOpen) startCameraDiscovery();
+  else stopCameraDiscovery();
 });
+
+onMounted(() => { if (props.open) startCameraDiscovery(); });
+onUnmounted(stopCameraDiscovery);
 
 function persistCameraConfig() {
   cameras.value.forEach((cam) => {
@@ -551,6 +623,7 @@ function onDisplayNameChange(cam: CameraConfig) {
       <div class="spinner" aria-hidden="true"></div>
       <div class="loader-text">Detecting cameras…</div>
     </div>
+    <p v-else-if="cameras.length === 0" class="subtext" role="status">No cameras detected. Connect a camera; this list updates automatically.</p>
     <div v-else class="camera-list" data-tour="camera-list">
       <div v-for="(cam, camIndex) in cameras" :key="cam.deviceId" class="camera-card" :class="{ deselected: !isSelected(cam.deviceId) }">
         <div class="camera-summary">

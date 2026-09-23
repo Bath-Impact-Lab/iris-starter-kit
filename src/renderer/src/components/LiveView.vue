@@ -221,8 +221,8 @@ onBeforeUnmount(() => {
           <button class="roi-button" @click="roiOpen = true; refreshRoi()">Capture area</button>
           <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
           <label class="field">
-            <span>Skeleton length ({{ da3Scene && showDa3 ? '1.0x with DA3' : `${mocapSettings.scale.toFixed(1)}x` }})</span>
-            <input v-if="!showDa3 || !da3Scene" type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
+            <span>Skeleton length ({{ mocapSettings.scale.toFixed(1) }}x)</span>
+            <input type="range" min="0.8" max="2.5" step="0.1" v-model.number="mocapSettings.scale" />
           </label>
           <label class="field">
             <span>Bone thickness ({{ mocapSettings.boneThickness.toFixed(3) }})</span>
