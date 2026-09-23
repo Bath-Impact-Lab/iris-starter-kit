@@ -1,8 +1,9 @@
-# IRIS Starter Kit
+![IRIS Starter Kit](docs/banner.jpg)
 
-Open-source, lightweight Electron starter for [IRIS](https://github.com/Bath-Impact-Lab/IRIS) markerless motion capture apps.
 
-This project is intentionally minimal and not a commercial product. It exists as a small, readable base for exploring the core IRIS flow (camera configuration, auto-calibration, and live motion capture) against a real `iris_cli` process, not a mock. The goal is to stay easy to understand, easy to run, and easy to extend without pulling in a full production architecture.
+Open-source, lightweight starter kit for [IRIS](https://iris.cs.bath.ac.uk/) markerless motion capture apps.
+
+This project is intentionally minimal and not a commercial product. It exists as a small, readable base for exploring the core IRIS flow (camera configuration, auto-calibration, and live motion capture). The goal is to stay easy to understand, easy to run, and easy to extend.
 
 ## Stack
 
