@@ -74,14 +74,15 @@ function rebuildCloud(): void {
   cloud = new THREE.Points(geometry, new THREE.PointsMaterial({
     size: 2, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false,
   }));
+  cloud.scale.setScalar(props.settings.scale);
   scene.add(cloud);
 }
 
 function buildScene(container: HTMLElement): void {
   scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x0a0c10, 3, 10);
+  scene.fog = new THREE.Fog(0x0a0c10, 3, 50);
 
-  camera = new THREE.PerspectiveCamera(45, 1, 0.05, 50);
+  camera = new THREE.PerspectiveCamera(45, 1, 0.05, 100);
   camera.position.set(1.6, 1.4, 2.4);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -93,7 +94,7 @@ function buildScene(container: HTMLElement): void {
   controls.dampingFactor = 0.08;
   controls.target.set(0, 0.9, 0);
   controls.minDistance = 0.6;
-  controls.maxDistance = 8;
+  controls.maxDistance = 40;
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x1a2030, 1.1));
   const key = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -160,10 +161,9 @@ function resizeScene(width: number, height: number): void {
   camera.updateProjectionMatrix();
 }
 
-function scaledPosition(center: JointCenter3D, anchor: THREE.Vector3 | null): THREE.Vector3 {
-  const scale = props.settings.scale;
-  const position = new THREE.Vector3(center.x, center.y, center.z);
-  return anchor ? position.sub(anchor).multiplyScalar(scale).add(anchor) : position.multiplyScalar(scale);
+function scaledPosition(center: JointCenter3D): THREE.Vector3 {
+  // Use the same world-origin transform as the DA3 cloud so they stay aligned.
+  return new THREE.Vector3(center.x, center.y, center.z).multiplyScalar(props.settings.scale);
 }
 
 function updateBone(start: THREE.Vector3, end: THREE.Vector3, mesh: THREE.Mesh): void {
@@ -183,24 +183,16 @@ function updateBone(start: THREE.Vector3, end: THREE.Vector3, mesh: THREE.Mesh):
 
 function updateScene(): void {
   if (skeleton !== skeletonForFrame(props.pose)) { rebuildSkeleton(); return; }
+  cloud?.scale.setScalar(props.settings.scale);
   const centers = extractJointCenters3D(props.pose);
   const byName = new Map(centers.map((center) => [center.name, center]));
-  // Keep the person in place against the calibrated point cloud while changing body length.
-  const pelvis = byName.get('pelvis');
-  const leftHip = byName.get('l_hip');
-  const rightHip = byName.get('r_hip');
-  const anchor = props.pointCloud && isValid(pelvis) ? new THREE.Vector3(pelvis.x, pelvis.y, pelvis.z)
-    : props.pointCloud && isValid(leftHip) && isValid(rightHip)
-      ? new THREE.Vector3((leftHip.x + rightHip.x) / 2, (leftHip.y + rightHip.y) / 2, (leftHip.z + rightHip.z) / 2)
-      : props.pointCloud && isValid(leftHip) ? new THREE.Vector3(leftHip.x, leftHip.y, leftHip.z)
-        : props.pointCloud && isValid(rightHip) ? new THREE.Vector3(rightHip.x, rightHip.y, rightHip.z) : null;
 
   for (const [name, mesh] of joints) {
     const state = jointState.get(name)!;
     const center = byName.get(name);
 
     if (isValid(center)) {
-      const raw = scaledPosition(center, anchor);
+      const raw = scaledPosition(center);
       if (state.everValid) state.smoothed.lerp(raw, SMOOTHING_ALPHA);
       else state.smoothed.copy(raw);
       state.everValid = true;
@@ -235,8 +227,12 @@ function updateScene(): void {
 let poseChanged = false;
 watch(() => props.pose, () => { poseChanged = true; });
 
-// scale/boneThickness are picked up on the next updateScene() call, which this triggers immediately.
-watch(() => props.settings, updateScene, { deep: true });
+// A scale change must move the skeleton immediately with the cloud, without pose smoothing lag.
+watch(() => props.settings.scale, () => {
+  for (const state of jointState.values()) state.everValid = false;
+  updateScene();
+});
+watch(() => props.settings.boneThickness, updateScene);
 watch(() => props.pointCloud, () => {
   rebuildCloud();
   for (const state of jointState.values()) state.everValid = false;
