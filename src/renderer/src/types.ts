@@ -1,6 +1,6 @@
 import type { PoseModelId } from '../../shared/poseModels';
 export type AppPhase = 'camera-setup' | 'calibration' | 'live';
-export type TrackingMode = 'single' | 'multi';
+export type TrackingMode = 'single' | 'multi' | 'multi-geometric';
 
 export type Resolution = `${number}x${number}`;
 import type { CameraMode } from '../../shared/capture';

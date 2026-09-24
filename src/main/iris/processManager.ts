@@ -101,7 +101,7 @@ export interface IrisDispatcherStatus {
 
 export interface StartIrisRunInput {
   pose_model?: PoseModelId
-  tracking_mode?: 'single' | 'multi'
+  tracking_mode?: 'single' | 'multi' | 'multi-geometric'
   roi_mode?: 'off' | 'automatic'
   specFile?: string
   verbose?: boolean
