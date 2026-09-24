@@ -17,14 +17,12 @@ const containerRef = ref<HTMLElement | null>(null);
 
 
 const JOINT_RADIUS = 0.035;
-// Per-frame joint data can be noisy/intermittent (occlusion, low confidence). Smooth
-// positions toward each new reading instead of snapping, and give a joint a short grace
-// period of missed frames before hiding it, instead of vanishing on the very first miss.
-const SMOOTHING_ALPHA = 0.35;
+// Briefly retain a joint through intermittent detections. Core already filters
+// valid 3D poses, so drawing them directly avoids another layer of motion lag.
 const MISS_FRAMES_BEFORE_HIDE = 5;
 
 interface JointState {
-  smoothed: THREE.Vector3;
+  position: THREE.Vector3;
   missCount: number;
   everValid: boolean;
 }
@@ -140,7 +138,7 @@ function rebuildSkeleton(): void {
     mesh.visible = false;
     if (name.startsWith('face_') || name.includes('_hand_')) mesh.scale.setScalar(0.25);
     joints.set(name, mesh);
-    jointState.set(name, { smoothed: new THREE.Vector3(), missCount: 0, everValid: false });
+    jointState.set(name, { position: new THREE.Vector3(), missCount: 0, everValid: false });
     scene.add(mesh);
   }
   for (const [from, to] of skeleton.bones) {
@@ -192,13 +190,11 @@ function updateScene(): void {
     const center = byName.get(name);
 
     if (isValid(center)) {
-      const raw = scaledPosition(center);
-      if (state.everValid) state.smoothed.lerp(raw, SMOOTHING_ALPHA);
-      else state.smoothed.copy(raw);
+      state.position.copy(scaledPosition(center));
       state.everValid = true;
       state.missCount = 0;
       mesh.visible = true;
-      mesh.position.copy(state.smoothed);
+      mesh.position.copy(state.position);
     } else if (state.everValid && state.missCount < MISS_FRAMES_BEFORE_HIDE) {
       // Brief dropout -- hold the last known position instead of vanishing immediately.
       state.missCount += 1;
@@ -214,7 +210,7 @@ function updateScene(): void {
     if (!mesh || !fromMesh || !toMesh) continue;
 
     if (fromMesh.visible && toMesh.visible) {
-      updateBone(jointState.get(from)!.smoothed, jointState.get(to)!.smoothed, mesh);
+      updateBone(jointState.get(from)!.position, jointState.get(to)!.position, mesh);
     } else {
       mesh.visible = false;
     }
@@ -227,15 +223,10 @@ function updateScene(): void {
 let poseChanged = false;
 watch(() => props.pose, () => { poseChanged = true; });
 
-// A scale change must move the skeleton immediately with the cloud, without pose smoothing lag.
-watch(() => props.settings.scale, () => {
-  for (const state of jointState.values()) state.everValid = false;
-  updateScene();
-});
+watch(() => props.settings.scale, updateScene);
 watch(() => props.settings.boneThickness, updateScene);
 watch(() => props.pointCloud, () => {
   rebuildCloud();
-  for (const state of jointState.values()) state.everValid = false;
   updateScene();
 });
 
