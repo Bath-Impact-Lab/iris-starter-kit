@@ -32,7 +32,10 @@ function loadPoseModel(): PoseModelId {
 const selectedPoseModel = ref<PoseModelId>(loadPoseModel());
 const activePoseModel = ref<PoseModelId | null>(null);
 function loadTrackingMode(): TrackingMode {
-  try { return localStorage.getItem('tracking-mode') === 'single' ? 'single' : 'multi'; }
+  try {
+    const saved = localStorage.getItem('tracking-mode');
+    return saved === 'single' || saved === 'multi-geometric' ? saved : 'multi';
+  }
   catch { return 'multi'; }
 }
 const selectedTrackingMode = ref<TrackingMode>(loadTrackingMode());

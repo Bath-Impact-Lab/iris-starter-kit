@@ -115,6 +115,17 @@
         "viewer_align": true,
         "save_ply": "scene.ply"
       },
+      "startup_extrinsics_ba": {
+        "enabled": true,
+        "warmup_frames": 500,
+        "min_points_per_camera": 15,
+        "min_joint_conf": 0.3,
+        "max_iterations": 15,
+        "huber_px": 5.0,
+        "fix_intrinsics": true,
+        "anchor_camera": 0,
+        "reject_if_not_improved": true
+      },
       "compute_reprojection": true,
       "store_reprojection_error": true,
       "gate_by_reprojection_error": true,
