@@ -6,8 +6,8 @@
       "nvenc": false
     },
     "buffers": {
-      "frame_capacity": 64,
-      "pose_capacity": 32,
+      "frame_capacity": 16,
+      "pose_capacity": 16,
       "export_shm": true,
       "camera_slots": 32
     }
