@@ -18,6 +18,32 @@ let irisStopped = false;
 // ProcessManager.stop escalates to SIGKILL after 5.5s; never block quit longer than this.
 const QUIT_STOP_TIMEOUT_MS = 7000;
 
+// Dev-only: the window stays hidden until ready-to-show, so a stalled startup
+// is otherwise silent. Records each load stage and dumps them if the window
+// is still hidden after STARTUP_WATCHDOG_MS.
+const STARTUP_WATCHDOG_MS = 10_000;
+
+function traceStartup(win: BrowserWindow): void {
+  const t0 = Date.now();
+  const stages: string[] = [];
+  const mark = (stage: string) => stages.push(`+${Date.now() - t0}ms ${stage}`);
+  const wc = win.webContents;
+  wc.on('did-start-loading', () => mark('did-start-loading'));
+  wc.on('did-navigate', (_e, url) => mark(`did-navigate ${url}`));
+  wc.on('dom-ready', () => mark('dom-ready'));
+  wc.on('did-finish-load', () => mark('did-finish-load'));
+  wc.on('did-fail-load', (_e, code, desc, url) => mark(`did-fail-load ${code} ${desc} ${url}`));
+  wc.on('render-process-gone', (_e, details) => mark(`render-process-gone ${details.reason}`));
+  wc.on('unresponsive', () => mark('unresponsive'));
+  app.on('child-process-gone', (_e, details) => mark(`child-process-gone ${details.type} ${details.reason}`));
+  win.once('ready-to-show', () => mark('ready-to-show'));
+
+  setTimeout(() => {
+    if (win.isDestroyed() || win.isVisible()) return;
+    console.warn(`[startup] window still hidden after ${STARTUP_WATCHDOG_MS}ms:\n  ${stages.join('\n  ') || '(no load events)'}`);
+  }, STARTUP_WATCHDOG_MS);
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -40,6 +66,8 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+
+  if (isDev) traceStartup(mainWindow);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
