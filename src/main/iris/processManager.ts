@@ -4,6 +4,7 @@ import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { buildConfigFromOptions, uniquePipeName, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
 import { createPipeServer } from './pipeServer.js'
+import { PoseLatencyMeter } from './poseLatency.js'
 import { createVideoPipeReader } from './videoPipeReader.js'
 import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
 import { IrisRunStore } from './runStore.js'
@@ -616,10 +617,12 @@ export class ProcessManager {
 
     try {
       console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${posePipePath}`)
+      const latency = new PoseLatencyMeter((line) => console.log(`[iris:monitor:${sessionId}] ${line}`))
       pipeServer = await this.openPipeServer({
         pipeName: posePipePath,
         // Each parsed frame is a fresh object, so tag it in place instead of copying.
         onFrame: (frame) => {
+          latency.observe(frame)
           if (frame && typeof frame === 'object') Object.assign(frame, { pose_model: modelId, run_id: runId })
           onFrame?.(frame)
         },
