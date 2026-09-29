@@ -129,13 +129,16 @@
       "compute_reprojection": true,
       "store_reprojection_error": true,
       "gate_by_reprojection_error": true,
-      "max_reprojection_error_px": 50.0,
+      "max_view_reprojection_px": 120.0,
+      "max_reprojection_error_px": 120.0,
       "smoothing": {
         "enabled": true,
         "freq": 100.0,
         "min_cutoff": 1.0,
-        "beta": 0.5,
-        "d_cutoff": 1.0,
+        "beta": 2.0,
+        "d_cutoff": 3.0,
+        "joint_speed": true,
+        "world_units_per_metre": 0.0,
         "cleanup_interval": 300
       }
     },
