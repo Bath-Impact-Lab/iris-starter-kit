@@ -67,6 +67,15 @@ describe('ProcessManager pose models', () => {
     await manager.stopAll();
   });
 
+  it('passes the selected tracking mode to the pipeline', async () => {
+    for (const [mode, single] of [['single', true], ['multi', false]] as const) {
+      const { manager, writeTempConfigFile } = makeManager({});
+      expect((await manager.startRun({ tracking_mode: mode, cameras: twoConfiguredCameras })).ok).toBe(true);
+      expect(writeTempConfigFile.mock.calls.at(-1)![0].pipeline.global_reid_tracking.single_person_mode).toBe(single);
+      await manager.stopAll();
+    }
+  });
+
   it('tags monitor frames with the model and run captured when the monitor opens', async () => {
     let receive: (frame: unknown) => void = () => {};
     const manager = new ProcessManager({ dependencies: {

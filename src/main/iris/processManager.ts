@@ -353,6 +353,7 @@ export class ProcessManager {
       options: {
         run_id: runId,
         roi_mode: input.roi_mode,
+        tracking_mode: input.tracking_mode,
         pose_model: input.pose_model,
         camera_width: settings.width,
         camera_height: settings.height,

@@ -95,7 +95,7 @@
         "prune_uncertainty": 5.0
       },
       "spawn": {
-        "require_multi_camera_spawn": false,
+        "require_multi_camera_spawn": true,
         "spawn_consensus_gate": 0.5,
         "spawn_consensus_max_age_frames": 5,
         "min_supporting_cameras": 1
