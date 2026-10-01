@@ -9,7 +9,7 @@ import { IrisRunStore } from './iris/runStore.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const isDev = process.env.NODE_ENV === 'development';
-const devServerUrl = process.env.ELECTRON_RENDERER_URL;
+const devServerUrl = process.env.ELECTRON_RENDERER_URL ?? (isDev ? 'http://127.0.0.1:5173' : undefined);
 
 let mainWindow: BrowserWindow | null = null;
 let processManager: ProcessManager | null = null;
@@ -17,10 +17,43 @@ let irisStopped = false;
 
 // ProcessManager.stop escalates to SIGKILL after 5.5s; never block quit longer than this.
 const QUIT_STOP_TIMEOUT_MS = 7000;
+const WINDOW_REVEAL_TIMEOUT_MS = 10000;
+const DEV_RENDERER_RETRY_DELAYS_MS = [0, 200, 400, 800, 1200, 2000, 2000, 2000];
 
-// Dev-only: the window stays hidden until ready-to-show, so a stalled startup
-// is otherwise silent. Records each load stage and dumps them if the window
-// is still hidden after STARTUP_WATCHDOG_MS.
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function loadRenderer(window: BrowserWindow): Promise<void> {
+  if (!isDev || !devServerUrl) {
+    await window.loadFile(path.join(__dirname, '../renderer/index.html'));
+    return;
+  }
+
+  let lastError: unknown;
+  for (const [attempt, delayMs] of DEV_RENDERER_RETRY_DELAYS_MS.entries()) {
+    if (delayMs > 0) await wait(delayMs);
+    if (window.isDestroyed()) return;
+
+    try {
+      await window.loadURL(devServerUrl);
+      if (attempt > 0) {
+        console.info(`[startup] Renderer connected after ${attempt + 1} attempts.`);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[startup] Renderer load attempt ${attempt + 1}/${DEV_RENDERER_RETRY_DELAYS_MS.length} failed; retrying.`,
+        error,
+      );
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+// Dev-only: record load stages if the window is still hidden after startup.
 const STARTUP_WATCHDOG_MS = 10_000;
 
 function traceStartup(win: BrowserWindow): void {
@@ -45,7 +78,7 @@ function traceStartup(win: BrowserWindow): void {
 }
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 960,
@@ -66,21 +99,33 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow = window;
 
-  if (isDev) traceStartup(mainWindow);
+  if (isDev) traceStartup(window);
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-  });
+  // `ready-to-show` is not guaranteed when the initial dev-server request
+  // fails. Never leave a live Electron process permanently invisible.
+  const revealTimeout = setTimeout(() => {
+    if (!window.isDestroyed() && !window.isVisible()) {
+      console.warn('[startup] Window was still hidden after 10 seconds; showing it for diagnostics.');
+      window.show();
+    }
+  }, WINDOW_REVEAL_TIMEOUT_MS);
 
-  if (isDev && devServerUrl) {
-    void mainWindow.loadURL(devServerUrl);
-  } else {
-    void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  }
+  void loadRenderer(window)
+    .then(() => {
+      clearTimeout(revealTimeout);
+      if (!window.isDestroyed()) window.show();
+    })
+    .catch((error) => {
+      clearTimeout(revealTimeout);
+      console.error('[startup] Renderer failed to load after retries:', error);
+      if (!window.isDestroyed()) window.show();
+    });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  window.on('closed', () => {
+    clearTimeout(revealTimeout);
+    if (mainWindow === window) mainWindow = null;
   });
 }
 

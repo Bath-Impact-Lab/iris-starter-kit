@@ -186,6 +186,10 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   const cameraCount = Math.max(1, cameraIds.length);
   const modelDir = IRIS_MODEL_DIR.replace(/\\/g, '/');
   const outputDir = IRIS_CALIBRATION_DIR.replace(/\\/g, '/');
+  const trackingMode: 'single' | 'multi' | 'multi-geometric' =
+    options.tracking_mode === 'single' || options.tracking_mode === 'multi-geometric'
+      ? options.tracking_mode
+      : 'multi';
 
   const config = loadPipelineTemplate();
   // Manual areas are reviewed after calibration; never replay old world coordinates.
@@ -209,6 +213,38 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
   });
 
   config.shared.models.detection.yolox_people.yolox_engine_path = `${modelDir}/yolox_s_bs16.trt`;
+  // ByteTrack-style association needs low-confidence boxes for its recovery
+  // pass. The old 0.7 detector cut-off made that pass impossible.
+  config.shared.models.detection.yolox_people.yolox_conf_threshold = 0.1;
+  config.pipeline.global_reid_tracking.single_person_mode = trackingMode === 'single';
+
+  // Experimental: IRIS-Core's geometric association, where 3D person tracks
+  // own the IDs and the tracker only hands over per-camera tracklets. Needs a
+  // Core build from feat/mp_research; older builds ignore the key and keep
+  // tracker IDs.
+  if (trackingMode === 'multi-geometric') {
+    config.pipeline.triangulation.association = { mode: 'geometric' };
+  }
+
+  // One subject: a rider's feet are off the floor and a seated person's box
+  // bottom is not at their feet, so floor points disagree between cameras
+  // more than for someone walking. Wider gates keep them on one ID.
+  if (trackingMode === 'single') {
+    Object.assign(config.pipeline.global_reid_tracking.kalman, { base_gate: 1.5, max_gate: 3.0 });
+  }
+
+  // Reusing a detection for 20 frames produces visibly stale crops and poor
+  // motion estimates. Multi-person/crossing scenes always detect every frame;
+  // single-person mode uses a conservative 2-frame cadence to cut YOLO work
+  // without introducing a long acquisition delay.
+  const detectionInterval = trackingMode === 'single' ? 2 : 1;
+  config.shared.defaults.detection.detection_skip_enabled = detectionInterval > 1;
+  config.shared.defaults.detection.detection_skip_frames = detectionInterval;
+
+  // A new identity should normally be corroborated by two views when the rig
+  // has them. Single-camera setups cannot satisfy that requirement.
+  config.pipeline.global_reid_tracking.spawn.require_multi_camera_spawn = cameraCount > 1;
+  config.pipeline.global_reid_tracking.spawn.min_supporting_cameras = Math.min(2, cameraCount);
   config.shared.models.reid.osnet_x05.engine_path = `${modelDir}/osnet_x05_fp16.trt`;
   const model = poseModel(options.pose_model);
   Object.assign(config.shared.models.pose.rtmpose_people, {

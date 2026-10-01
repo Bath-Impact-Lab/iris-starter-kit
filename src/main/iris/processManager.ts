@@ -4,6 +4,7 @@ import type { Server as NetServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { buildConfigFromOptions, uniquePipeName, getIrisCliMissingMessage, getIrisCliPath, listIrisCameras, type IrisCameraDevice } from './config.js'
 import { createPipeServer } from './pipeServer.js'
+import { PoseLatencyMeter } from './poseLatency.js'
 import { createVideoPipeReader } from './videoPipeReader.js'
 import { VideoRelayServer, type VideoStreamDescriptor } from './videoRelayServer.js'
 import { IrisRunStore } from './runStore.js'
@@ -101,6 +102,7 @@ export interface IrisDispatcherStatus {
 
 export interface StartIrisRunInput {
   pose_model?: PoseModelId
+  tracking_mode?: 'single' | 'multi' | 'multi-geometric'
   roi_mode?: 'off' | 'automatic'
   specFile?: string
   verbose?: boolean
@@ -351,6 +353,7 @@ export class ProcessManager {
       options: {
         run_id: runId,
         roi_mode: input.roi_mode,
+        tracking_mode: input.tracking_mode,
         pose_model: input.pose_model,
         camera_width: settings.width,
         camera_height: settings.height,
@@ -514,7 +517,9 @@ export class ProcessManager {
     this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
-    const child = this.spawnProcess(cliPath, ['run', cfgPath, '--control-pipe', controlPipe], {
+    const reportPath = this.runStore?.reportPath(sessionId)
+    const runArgs = ['run', cfgPath, '--control-pipe', controlPipe, ...(reportPath ? ['--report', reportPath] : [])]
+    const child = this.spawnProcess(cliPath, runArgs, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -616,10 +621,12 @@ export class ProcessManager {
 
     try {
       console.log(`[iris:monitor:${sessionId}] step 2/4 -- opening named pipe server at ${posePipePath}`)
+      const latency = new PoseLatencyMeter((line) => console.log(`[iris:monitor:${sessionId}] ${line}`))
       pipeServer = await this.openPipeServer({
         pipeName: posePipePath,
         // Each parsed frame is a fresh object, so tag it in place instead of copying.
         onFrame: (frame) => {
+          latency.observe(frame)
           if (frame && typeof frame === 'object') Object.assign(frame, { pose_model: modelId, run_id: runId })
           onFrame?.(frame)
         },

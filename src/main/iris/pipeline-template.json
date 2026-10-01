@@ -27,7 +27,7 @@
           "type": "yolox",
           "yolox_input_width": 640,
           "yolox_input_height": 640,
-          "yolox_conf_threshold": 0.7,
+          "yolox_conf_threshold": 0.1,
           "yolox_iou_threshold": 0.45
         }
       },
@@ -50,7 +50,7 @@
       "detection": {
         "batch_size": 16,
         "detection_skip_enabled": true,
-        "detection_skip_frames": 20
+        "detection_skip_frames": 5
       },
       "output": {
         "shm_name": "iris_shm_ipc",
@@ -95,7 +95,7 @@
         "prune_uncertainty": 5.0
       },
       "spawn": {
-        "require_multi_camera_spawn": false,
+        "require_multi_camera_spawn": true,
         "spawn_consensus_gate": 0.5,
         "spawn_consensus_max_age_frames": 5,
         "min_supporting_cameras": 1
@@ -115,16 +115,30 @@
         "viewer_align": true,
         "save_ply": "scene.ply"
       },
+      "startup_extrinsics_ba": {
+        "enabled": true,
+        "warmup_frames": 500,
+        "min_points_per_camera": 15,
+        "min_joint_conf": 0.3,
+        "max_iterations": 15,
+        "huber_px": 5.0,
+        "fix_intrinsics": true,
+        "anchor_camera": 0,
+        "reject_if_not_improved": true
+      },
       "compute_reprojection": true,
       "store_reprojection_error": true,
       "gate_by_reprojection_error": true,
-      "max_reprojection_error_px": 50.0,
+      "max_view_reprojection_px": 120.0,
+      "max_reprojection_error_px": 120.0,
       "smoothing": {
         "enabled": true,
         "freq": 100.0,
         "min_cutoff": 1.0,
-        "beta": 0.5,
-        "d_cutoff": 1.0,
+        "beta": 2.0,
+        "d_cutoff": 3.0,
+        "joint_speed": true,
+        "world_units_per_metre": 0.0,
         "cleanup_interval": 300
       }
     },

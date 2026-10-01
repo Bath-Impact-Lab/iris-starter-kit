@@ -1,6 +1,6 @@
 import { SKELETONS } from '../../../shared/skeletons';
 import { poseModel } from '../../../shared/poseModels';
-import type { PoseFrame } from '../types';
+import type { PoseFrame, PosePerson } from '../types';
 
 export { HALPE26_JOINT_NAMES } from '../../../shared/skeletons';
 
@@ -31,8 +31,8 @@ export interface JointRotation3D {
 }
 
 // 3D joint positions in metres. Undetected joints come back as (0, 0, 0).
-export function extractJointCenters3D(frame: PoseFrame | null | undefined): JointCenter3D[] {
-  const person = frame?.people?.[0];
+export function extractJointCenters3D(frame: PoseFrame | null | undefined,
+  person: PosePerson | undefined = frame?.people?.[0]): JointCenter3D[] {
   const centers = person?.joint_centers;
   if (!Array.isArray(centers)) return [];
 
@@ -45,8 +45,8 @@ export function extractJointCenters3D(frame: PoseFrame | null | undefined): Join
 // Rotations for the joints that have a real one (see
 // JOINTS_WITH_REAL_ROTATION); the rest default to the identity rotation and
 // are left out rather than returned as fake data.
-export function extractJointRotations3D(frame: PoseFrame | null | undefined): JointRotation3D[] {
-  const person = frame?.people?.[0];
+export function extractJointRotations3D(frame: PoseFrame | null | undefined,
+  person: PosePerson | undefined = frame?.people?.[0]): JointRotation3D[] {
   // The core's rotation solver currently assumes HALPE-26.
   if (poseModel(frame?.pose_model).layout !== 'halpe26') return [];
   const angles = person?.joint_angles;
@@ -66,8 +66,8 @@ export interface PoseKeypoint2D {
 // `points_2d[jointIndex][cameraIndex] = [u, v]` raw pixel coordinates.
 // (0, 0) means "no detection"; there is no separate validity flag.
 export function extractKeypoints2D(frame: PoseFrame | null | undefined, cameraIndex = 0,
-  count = skeletonForFrame(frame).names.length): Array<PoseKeypoint2D | null> {
-  const person = frame?.people?.[0];
+  count = skeletonForFrame(frame).names.length,
+  person: PosePerson | undefined = frame?.people?.[0]): Array<PoseKeypoint2D | null> {
   const points = person?.points_2d;
   if (!Array.isArray(points)) return [];
 

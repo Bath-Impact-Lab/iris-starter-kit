@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { ProcessManager } from './processManager.js';
+import { IrisRunStore } from './runStore.js';
 import type { IrisCameraDevice } from './config.js';
 
 function fakeChild() {
@@ -26,6 +30,7 @@ function fakeChild() {
 function makeManager(overrides: {
   listCameras?: (cliPath: string) => Promise<IrisCameraDevice[] | null>;
   spawnProcess?: (command: string, args: string[]) => any;
+  runStore?: IrisRunStore;
 }) {
   const writeTempConfigFile = vi.fn((config: Record<string, any>) => ({
     tmpDir: 'C:\\fake\\tmp',
@@ -33,6 +38,7 @@ function makeManager(overrides: {
   }));
 
   const manager = new ProcessManager({
+    runStore: overrides.runStore,
     dependencies: {
       spawnProcess: overrides.spawnProcess ?? (() => fakeChild()),
       pathExists: () => true,
@@ -65,6 +71,15 @@ describe('ProcessManager pose models', () => {
     expect(writeTempConfigFile.mock.calls.at(-1)![0].shared.models.pose.rtmpose_people)
       .toMatchObject({ num_keypoints: 133, input_w: 288, input_h: 384 });
     await manager.stopAll();
+  });
+
+  it('passes the selected tracking mode to the pipeline', async () => {
+    for (const [mode, single] of [['single', true], ['multi', false]] as const) {
+      const { manager, writeTempConfigFile } = makeManager({});
+      expect((await manager.startRun({ tracking_mode: mode, cameras: twoConfiguredCameras })).ok).toBe(true);
+      expect(writeTempConfigFile.mock.calls.at(-1)![0].pipeline.global_reid_tracking.single_person_mode).toBe(single);
+      await manager.stopAll();
+    }
   });
 
   it('tags monitor frames with the model and run captured when the monitor opens', async () => {
@@ -303,4 +318,37 @@ describe('ProcessManager graceful monitor shutdown', () => {
     await manager.stopAll();
     expect(child.kill).not.toHaveBeenCalled();
   }, 1000);
+});
+
+describe('ProcessManager run report', () => {
+  const userData = mkdtempSync(path.join(tmpdir(), 'iris-kit-test-'));
+  const twoCameras = [
+    { id: '0', label: 'Camera 1' },
+    { id: '1', label: 'Camera 2' },
+  ];
+  afterAll(() => rmSync(userData, { recursive: true, force: true }));
+
+  it("asks core to keep the run's report beside its run record, because the app ends runs by killing them", async () => {
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => fakeChild());
+    const { manager } = makeManager({ spawnProcess, runStore: new IrisRunStore(userData) });
+
+    await manager.startRun({ run_id: 'report-run', cameras: twoCameras });
+
+    const args = spawnProcess.mock.calls.find(([, a]) => a[0] === 'run')![1];
+    expect(args[args.indexOf('--report') + 1]).toBe(path.join(userData, 'iris-runs', 'report-run.report.json'));
+  });
+
+  it('passes no report path when there is nowhere to keep one', async () => {
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => fakeChild());
+    const { manager } = makeManager({ spawnProcess });
+
+    await manager.startRun({ run_id: 'no-store', cameras: twoCameras });
+
+    const args = spawnProcess.mock.calls.find(([, a]) => a[0] === 'run')![1];
+    expect(args).not.toContain('--report');
+  });
+
+  it('refuses a run ID that could point the report outside the run directory', () => {
+    expect(() => new IrisRunStore(userData).reportPath('..\\..\\evil')).toThrow('invalid');
+  });
 });
