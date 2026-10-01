@@ -66,11 +66,22 @@ export class IrisRunStore {
     return value
   }
 
+  // Where core writes this run's report (`iris_cli run --report`), next to the
+  // run's own record. Core rewrites it every few seconds, so a run that the app
+  // ends by killing the process still leaves the latest one behind.
+  reportPath(runId: string): string {
+    return path.join(this.directory, `${this.safeId(runId)}.report.json`)
+  }
+
   private filePath(runId: string): string {
+    return path.join(this.directory, `${this.safeId(runId)}.json`)
+  }
+
+  private safeId(runId: string): string {
     if (!/^[A-Za-z0-9_-]+$/.test(runId)) {
       throw new Error('Iris run ID is invalid')
     }
-    return path.join(this.directory, `${runId}.json`)
+    return runId
   }
 }
 

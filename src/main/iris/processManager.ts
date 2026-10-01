@@ -517,7 +517,9 @@ export class ProcessManager {
     this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
-    const child = this.spawnProcess(cliPath, ['run', cfgPath, '--control-pipe', controlPipe], {
+    const reportPath = this.runStore?.reportPath(sessionId)
+    const runArgs = ['run', cfgPath, '--control-pipe', controlPipe, ...(reportPath ? ['--report', reportPath] : [])]
+    const child = this.spawnProcess(cliPath, runArgs, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
