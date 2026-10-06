@@ -47,6 +47,8 @@ npm install
 npm run dev
 ```
 
+npm 12+ only runs dependency install scripts that are listed under `allowScripts` in `package.json`. Electron's install script is what downloads the Electron binary, so if `npm run dev` fails with `Electron uninstall`, that script never ran - usually because `node_modules` was installed before the allowlist was there, and approving a package doesn't run its script retroactively. Fix it with `npm rebuild electron esbuild electron-winstaller`. The entries pin exact versions, so after bumping one of these packages, re-approve it with `npm install-scripts approve <pkg>` or its script is silently skipped again.
+
 ## Scripts
 
 | Command | Description |
