@@ -11,13 +11,13 @@
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node scripts/ensure-electron.mjs && electron-vite dev",
     "test:roi": "vitest run src/main/iris/roiClient.test.ts src/main/iris/roiStore.test.ts src/main/iris/da3Scene.test.ts src/renderer/src/utils/roiGeometry.test.ts",
     "build": "npm run typecheck && electron-vite build",
     "test": "vitest run",
     "test:iris": "vitest run src/main/iris",
     "test:cameras": "vitest run src/main/iris/config.test.ts src/main/iris/processManager.test.ts src/renderer/src/utils/camera-probe.test.ts",
-    "preview": "electron-vite preview",
+    "preview": "node scripts/ensure-electron.mjs && electron-vite preview",
     "typecheck": "vue-tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "package": "npm run build && electron-builder --win"
   },
@@ -69,5 +69,10 @@
     "electron@34.5.8": true,
     "electron-winstaller@5.4.0": true,
     "esbuild@0.25.12": true
+  },
+  "overrides": {
+    "extract-zip": {
+      "yauzl": "^3.4.0"
+    }
   }
 }

@@ -47,7 +47,9 @@ npm install
 npm run dev
 ```
 
-npm 12+ only runs dependency install scripts that are listed under `allowScripts` in `package.json`. Electron's install script is what downloads the Electron binary, so if `npm run dev` fails with `Electron uninstall`, that script never ran - usually because `node_modules` was installed before the allowlist was there, and approving a package doesn't run its script retroactively. Fix it with `npm rebuild electron esbuild electron-winstaller`. The entries pin exact versions, so after bumping one of these packages, re-approve it with `npm install-scripts approve <pkg>` or its script is silently skipped again.
+npm 12+ only runs dependency install scripts that are listed under `allowScripts` in `package.json`, and approving one later doesn't re-run a script it already skipped. Electron's install script is what downloads the Electron binary, so `npm run dev` and `npm run preview` start with `scripts/ensure-electron.mjs`, which runs Electron's installer itself when the binary is missing (otherwise electron-vite fails with `Electron uninstall`). The `allowScripts` entries pin exact versions, so after bumping one of these packages, re-approve it with `npm install-scripts approve <pkg>` or its script is silently skipped again.
+
+Electron 34's installer unzips the binary with `extract-zip`, whose `yauzl` 2 dependency stops after the first file on Node 26 while the installer still exits without an error. The `overrides` entry in `package.json` moves it to `yauzl` 3; drop it once Electron is upgraded (newer Electron uses its own extractor).
 
 ## Scripts
 
