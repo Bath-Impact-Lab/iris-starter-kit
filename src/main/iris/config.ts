@@ -214,8 +214,10 @@ export function buildConfigFromOptions(options: Record<string, any> = {}) {
 
   config.shared.models.detection.yolox_people.yolox_engine_path = `${modelDir}/yolox_s_bs16.trt`;
   // ByteTrack-style association needs low-confidence boxes for its recovery
-  // pass. The old 0.7 detector cut-off made that pass impossible.
-  config.shared.models.detection.yolox_people.yolox_conf_threshold = 0.1;
+  // pass. The old 0.7 detector cut-off made that pass impossible. A single
+  // subject doesn't need that recovery, and the low boxes only add noise, so
+  // single-person mode uses 0.5 (same as IRIS Studio).
+  config.shared.models.detection.yolox_people.yolox_conf_threshold = trackingMode === 'single' ? 0.5 : 0.1;
   config.pipeline.global_reid_tracking.single_person_mode = trackingMode === 'single';
 
   // Experimental: IRIS-Core's geometric association, where 3D person tracks

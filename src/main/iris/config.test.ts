@@ -47,6 +47,16 @@ describe('config', () => {
     expect(config.shared.defaults.detection).toMatchObject({ detection_skip_enabled: true, detection_skip_frames: 2 });
   });
 
+  it('keeps low-confidence boxes for multi-person recovery only', () => {
+    const single = buildConfigFromOptions({ tracking_mode: 'single', cameras: [{ id: 0 }, { id: 1 }] });
+    expect(single.shared.models.detection.yolox_people.yolox_conf_threshold).toBe(0.5);
+
+    for (const tracking_mode of ['multi', 'multi-geometric']) {
+      const multi = buildConfigFromOptions({ tracking_mode, cameras: [{ id: 0 }, { id: 1 }] });
+      expect(multi.shared.models.detection.yolox_people.yolox_conf_threshold).toBe(0.1);
+    }
+  });
+
   it('widens the tracker gates for a single subject only', () => {
     const single = buildConfigFromOptions({ tracking_mode: 'single', cameras: [{ id: 0 }, { id: 1 }] });
     expect(single.pipeline.global_reid_tracking.kalman).toMatchObject({ base_gate: 1.5, max_gate: 3.0 });

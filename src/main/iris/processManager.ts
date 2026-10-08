@@ -505,16 +505,20 @@ export class ProcessManager {
 
     console.log(`[iris:run:${sessionId}] step 2/3 -- writing pipeline spec (run_id, runtime, shared, pipeline incl. auto-calibration config)`)
     const config = buildConfigFromOptions(options)
+    // Absent when a published rig calibration replaces auto-calibration; that run has no scene to show.
     const calibration = config.pipeline.triangulation.da3_startup_calibration
-    calibration.output_dir = path.join(calibration.output_dir, randomUUID()).replaceAll('\\', '/')
-    calibration.save_ply = 'scene.ply'
+    if (calibration) {
+      // A unique directory per run, so a scene is never read from an earlier run's output.
+      calibration.output_dir = path.join(calibration.output_dir, randomUUID()).replaceAll('\\', '/')
+      calibration.save_ply = 'scene.ply'
+    }
     const { tmpDir, cfgPath } = this.createTempConfig(config)
     console.log(`[iris:run:${sessionId}] step 2/3 done -- ${cfgPath}`)
     this.roiClient?.close()
     const controlPipe = uniquePipeName('iris_roi')
     this.roiClient = new RoiClient(controlPipe, options.run_id ?? sessionId)
     const runRoiClient = this.roiClient
-    this.da3Scene = new Da3SceneSource(runRoiClient.runId, calibration.output_dir)
+    this.da3Scene = calibration ? new Da3SceneSource(runRoiClient.runId, calibration.output_dir) : null
 
     console.log(`[iris:run:${sessionId}] step 3/3 -- spawning "iris_cli run ${cfgPath}"`)
     const reportPath = this.runStore?.reportPath(sessionId)
