@@ -22,3 +22,39 @@ button,
 select {
   font-family: inherit;
 }
+
+/* Scrollbars: thin accent pill, hidden until the element scrolls (see utils/scrollbarActivity.ts).
+   Don't set scrollbar-width/scrollbar-color anywhere: Chromium then ignores these rules.
+   No fade: Chromium doesn't repaint ::-webkit-scrollbar for transitions or var() changes. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+  background-color: transparent;
+}
+
+[data-scrolling]::-webkit-scrollbar-thumb {
+  background-color: rgb(59 111 217 / 0.6);
+}
+
+/* Stays grabbable even while hidden. */
+::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: rgb(59 111 217 / 0.85);
+}
+
+::-webkit-scrollbar-thumb:active {
+  border-width: 1px;
+  background-color: #3b6fd9;
+}

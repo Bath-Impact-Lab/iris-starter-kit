@@ -182,7 +182,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="live">
-    <div v-show="!roiOpen" class="top-row">
+    <div v-show="!roiOpen" class="main-col">
       <section class="pane mocap" data-tour="live-mocap">
         <header class="pane-head">
           <span>Live mocap</span>
@@ -193,172 +193,294 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <aside class="pane settings-panel" data-tour="live-settings">
-        <header class="pane-head">
-          <span>Live settings</span>
-        </header>
-        <div class="settings-body">
-          <div class="stat">
-            <span class="stat-label">People</span>
-            <span class="stat-value">{{ people }}</span>
+      <div class="camera-strip">
+        <section v-for="(cam, index) in cameras" :key="cam.deviceId" class="pane camera-pane" :class="{ portrait: isPortrait(cam.rotation) }">
+          <header class="pane-head">
+            <span>{{ cam.label }}</span>
+            <span class="meta">{{ cam.resolution }} · {{ cam.fps }} fps · {{ cam.rotation }}°</span>
+          </header>
+          <div class="feed">
+            <canvas
+              v-if="hasStream(index)"
+              :ref="setVideoRef(index)"
+              class="feed-video"
+              :class="`rotate-${displayRotation(cam.rotation)}`"
+            />
+            <div v-else class="feed-inner" :class="`rotate-${displayRotation(cam.rotation)}`">
+              <span class="feed-label">Camera feed</span>
+            </div>
           </div>
-          <div class="stat">
-            <span class="stat-label">Joints</span>
-            <span class="stat-value">{{ jointsValid }}/{{ jointsTotal }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label" title="Pose updates received by the app per second, not camera capture FPS">Pose updates/s</span>
-            <span class="stat-value">{{ fps }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">Cameras</span>
-            <span class="stat-value">{{ cameras.length }}</span>
-          </div>
-
-          <h4 class="settings-subhead">Mocap view</h4>
-          <label class="scene-toggle"><input type="checkbox" v-model="showDa3" /> Show DA3 reconstruction</label>
-          <span v-if="showDa3 && !da3Key" class="meta" role="status">Waiting for calibration to provide a scene.</span>
-          <span v-else-if="showDa3 && (da3Loading || da3Error)" class="meta" role="status">
-            {{ da3Loading ? 'Loading DA3 reconstruction…' : da3Error }}
-            <button v-if="da3Error" type="button" class="retry-button" @click="loadDa3">Retry</button>
-          </span>
-          <span v-else-if="showDa3 && da3Scene" class="meta">Scene shown in calibrated world coordinates.</span>
-          <button class="roi-button" @click="roiOpen = true; refreshRoi()">Capture area</button>
-          <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
-          <label class="field">
-            <span>Skeleton + DA3 scale ({{ mocapSettings.scale.toFixed(1) }}x)</span>
-            <input type="range" min="0.8" max="5" step="0.1" v-model.number="mocapSettings.scale" />
-          </label>
-          <label class="field">
-            <span>Bone thickness ({{ mocapSettings.boneThickness.toFixed(3) }})</span>
-            <input type="range" min="0.006" max="0.03" step="0.002" v-model.number="mocapSettings.boneThickness" />
-          </label>
-        </div>
-      </aside>
+        </section>
+      </div>
     </div>
 
-    <div v-show="!roiOpen" class="camera-grid">
-      <section v-for="(cam, index) in cameras" :key="cam.deviceId" class="pane camera-pane">
-        <header class="pane-head">
-          <span>{{ cam.label }}</span>
-          <span class="meta">{{ cam.resolution }} · {{ cam.fps }} fps · {{ cam.rotation }}°</span>
-        </header>
-        <div class="feed" :class="{ portrait: isPortrait(cam.rotation) }">
-          <canvas
-            v-if="hasStream(index)"
-            :ref="setVideoRef(index)"
-            class="feed-video"
-            :class="`rotate-${displayRotation(cam.rotation)}`"
-          />
-          <div v-else class="feed-inner" :class="`rotate-${displayRotation(cam.rotation)}`">
-            <span class="feed-label">Camera feed</span>
-          </div>
+    <aside v-show="!roiOpen" class="pane settings-panel" data-tour="live-settings">
+      <header class="pane-head">
+        <span>Live settings</span>
+      </header>
+      <div class="settings-body">
+        <div class="stats">
+          <div class="stat"><span class="stat-label">People</span><span class="stat-value">{{ people }}</span></div>
+          <div class="stat"><span class="stat-label">Joints</span><span class="stat-value">{{ jointsValid }}/{{ jointsTotal }}</span></div>
+          <div class="stat"><span class="stat-label" title="Pose updates received by the app per second, not camera capture FPS">Pose updates/s</span><span class="stat-value">{{ fps }}</span></div>
+          <div class="stat"><span class="stat-label">Cameras</span><span class="stat-value">{{ cameras.length }}</span></div>
         </div>
-      </section>
-    </div>
+
+        <details class="section" open>
+          <summary class="settings-subhead"><span>Mocap view</span></summary>
+          <div class="section-body">
+            <label class="field">
+              <span>Skeleton + DA3 scale ({{ mocapSettings.scale.toFixed(1) }}x)</span>
+              <input type="range" min="0.8" max="5" step="0.1" v-model.number="mocapSettings.scale" />
+            </label>
+            <label class="field">
+              <span>Bone thickness ({{ mocapSettings.boneThickness.toFixed(3) }})</span>
+              <input type="range" min="0.006" max="0.03" step="0.002" v-model.number="mocapSettings.boneThickness" />
+            </label>
+            <label class="scene-toggle"><input type="checkbox" v-model="showDa3" /> Show DA3 reconstruction</label>
+            <span v-if="showDa3 && !da3Key" class="meta" role="status">Waiting for calibration to provide a scene.</span>
+            <span v-else-if="showDa3 && (da3Loading || da3Error)" class="meta" role="status">
+              {{ da3Loading ? 'Loading DA3 reconstruction…' : da3Error }}
+              <button v-if="da3Error" type="button" class="btn" @click="loadDa3">Retry</button>
+            </span>
+            <span v-else-if="showDa3 && da3Scene" class="meta">Scene shown in calibrated world coordinates.</span>
+          </div>
+        </details>
+
+        <details class="section" open>
+          <summary class="settings-subhead"><span>Capture area</span></summary>
+          <div class="section-body">
+            <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
+            <div class="actions">
+              <button type="button" class="btn primary" @click="roiOpen = true; refreshRoi()">Edit capture area</button>
+            </div>
+          </div>
+        </details>
+      </div>
+    </aside>
+
     <CaptureAreaWorkspace v-if="roiOpen" :state="roiState" :saved="savedRoi" :error="roiError" :get-frame="getRoiFrame"
       :rotation-for="roiRotation" @close="roiOpen = false" @refresh="refreshRoi" @applied="roiState = $event" />
   </div>
 </template>
 
 <style scoped>
+/* Type scale for this view: 12px for labels, controls and buttons, 11px for hints/status. */
 .live {
   flex: 1;
   display: flex;
-  flex-direction: column;
   gap: 12px;
   padding: 12px;
+  min-width: 0;
   min-height: 0;
 }
 
-.top-row {
+.main-col {
+  flex: 1;
+  min-width: 0;
   display: flex;
+  flex-direction: column;
   gap: 12px;
-  flex: 3;
   min-height: 0;
 }
 
 .mocap {
   flex: 3;
+  min-height: 0;
+}
+
+.capture-workspace {
   min-width: 0;
 }
 
+/* One row of tiles sized off the strip's height; more cameras scroll sideways. */
+.camera-strip {
+  flex: 2;
+  min-height: 160px;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.camera-pane {
+  flex: none;
+  height: 100%;
+  aspect-ratio: 3 / 2;
+}
+
+.camera-pane.portrait {
+  aspect-ratio: 4 / 5;
+}
+
+.camera-pane .feed {
+  min-height: 0;
+}
+
 .settings-panel {
-  flex: 1;
-  min-width: 200px;
-  max-width: 280px;
+  flex: none;
+  width: 300px;
 }
 
 .settings-body {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  font-size: 12px;
+  color: #c7cbd6;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
 }
 
 .stat {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 12px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: #0f1219;
+  border: 1px solid #252b38;
+  border-radius: 5px;
 }
 
 .stat-label {
+  font-size: 11px;
   color: #8b93a7;
 }
 
 .stat-value {
-  color: #e8eaed;
-  font-weight: 600;
-}
-
-.settings-subhead {
-  margin: 4px 0 0;
   font-size: 12px;
   font-weight: 600;
   color: #e8eaed;
+}
+
+.section {
+  padding-top: 12px;
+  border-top: 1px solid #252b38;
+}
+
+.section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.settings-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8b93a7;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.settings-subhead::-webkit-details-marker {
+  display: none;
+}
+
+.settings-subhead::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.section[open] > .settings-subhead::before {
+  transform: rotate(45deg);
+}
+
+.settings-subhead:hover {
+  color: #c7cbd6;
+}
+
+.meta {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: #8b93a7;
+}
+
+.pane-head .meta {
+  line-height: normal;
+}
+
+/* Every button in the view shares this; .primary marks the main action of a section. */
+.btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 7px 12px;
+  color: #eef4ff;
+  background: #1e2636;
+  border: 1px solid #3a4356;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: #526784;
+  background: #243048;
+}
+
+.btn.primary {
+  background: #2f5fd0;
+  border-color: #3b6fd9;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #3b6fd9;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.meta .btn {
+  margin-left: 6px;
+  padding: 3px 8px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scene-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #e8eaed;
+  cursor: pointer;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
   color: #8b93a7;
 }
 
 .field input[type='range'] {
   width: 100%;
-}
-.scene-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #e8eaed; }
-.retry-button { margin-left: 6px; padding: 3px 7px; color: #eef4ff; background: #263650; border: 1px solid #526784; border-radius: 4px; }
-
-.camera-grid {
-  flex: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 12px;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* Fixed-size, fixed-aspect tiles laid out together -- not grid cells stretched to fill
-   whatever space happens to be available. */
-.camera-pane {
-  flex: 0 1 260px;
-}
-
-.camera-pane .feed {
-  flex: none;
-  width: 100%;
-  min-height: 0;
-  aspect-ratio: 3 / 2;
-}
-
-.camera-pane .feed.portrait {
-  aspect-ratio: 4 / 5;
 }
 
 .pane {
@@ -375,15 +497,17 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   border-bottom: 1px solid #252b38;
 }
 
-.meta {
-  font-weight: 400;
-  color: #8b93a7;
+.pane-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .feed {
@@ -439,7 +563,6 @@ onBeforeUnmount(() => {
   object-fit: contain;
   background: #0a0c10;
 }
-.roi-button { padding: 9px 12px; background: #263650; color: #eef4ff; border: 1px solid #526784; border-radius: 5px; }
 
 .mocap-feed {
   background: radial-gradient(ellipse at center, #151a24 0%, #0a0c10 70%);
