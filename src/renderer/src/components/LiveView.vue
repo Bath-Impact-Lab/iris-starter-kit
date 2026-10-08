@@ -226,8 +226,8 @@ onBeforeUnmount(() => {
           <div class="stat"><span class="stat-label">Cameras</span><span class="stat-value">{{ cameras.length }}</span></div>
         </div>
 
-        <details class="section" open>
-          <summary class="settings-subhead"><span>Mocap view</span></summary>
+        <section class="section">
+          <h4 class="settings-subhead">Mocap view</h4>
           <div class="section-body">
             <label class="field">
               <span>Skeleton + DA3 scale ({{ mocapSettings.scale.toFixed(1) }}x)</span>
@@ -245,17 +245,17 @@ onBeforeUnmount(() => {
             </span>
             <span v-else-if="showDa3 && da3Scene" class="meta">Scene shown in calibrated world coordinates.</span>
           </div>
-        </details>
+        </section>
 
-        <details class="section" open>
-          <summary class="settings-subhead"><span>Capture area</span></summary>
+        <section class="section">
+          <h4 class="settings-subhead">Capture area</h4>
           <div class="section-body">
             <span class="meta">{{ roiState ? `${roiState.mode} · ${roiState.availability.replaceAll('_', ' ')}` : 'Capture area unavailable' }}</span>
             <div class="actions">
               <button type="button" class="btn primary" @click="roiOpen = true; refreshRoi()">Edit capture area</button>
             </div>
           </div>
-        </details>
+        </section>
       </div>
     </aside>
 
@@ -374,39 +374,12 @@ onBeforeUnmount(() => {
 }
 
 .settings-subhead {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  margin: 0;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #8b93a7;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-.settings-subhead::-webkit-details-marker {
-  display: none;
-}
-
-.settings-subhead::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(-45deg);
-  transition: transform 0.15s ease;
-}
-
-.section[open] > .settings-subhead::before {
-  transform: rotate(45deg);
-}
-
-.settings-subhead:hover {
-  color: #c7cbd6;
 }
 
 .meta {
